@@ -307,16 +307,12 @@ function autoBuildInputsFromRaw() {
   }
 
   const existingBoostCampaignRows = getRows_(ss.getSheetByName('input_boost_campaigns'));
-  const existingStopRows = getRows_(ss.getSheetByName('input_stop_products'));
 
   const autoBoostCampaignRows = buildBoostCampaignRowsFromRaw_(rawRows, config, existingBoostCampaignRows);
   writeRows_(ss.getSheetByName('input_boost_campaigns'), autoBoostCampaignRows);
 
   const autoMappingRows = buildMappingRowsFromRaw_(rawRows, config, autoBoostCampaignRows);
   writeRows_(ss.getSheetByName('input_mapping'), autoMappingRows);
-
-  const mergedStopRows = mergeStopProductsWithCandidates_(existingStopRows, autoBoostCampaignRows);
-  writeRows_(ss.getSheetByName('input_stop_products'), mergedStopRows);
 
   const boostCampaignMap = buildBoostCampaignMap_(autoBoostCampaignRows);
   const convertedBoost = convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config);
@@ -327,9 +323,9 @@ function autoBuildInputsFromRaw() {
       'RAWから必須inputの自動作成が完了しました。',
       'input_boost_campaigns: ' + autoBoostCampaignRows.length + ' 行',
       'input_mapping: ' + autoMappingRows.length + ' 行',
-      'input_stop_products: ' + mergedStopRows.length + ' 行（承認済みは維持）',
       'input_boost: ' + convertedBoost.length + ' 行',
-      '次: input_stop_products で approved_to_stop=true を付けて 1) 判定＆出力作成'
+      '注意: input_stop_products は自動更新していません（停止ASINは手入力）。',
+      '次: input_stop_products に停止ASINを入力して approved_to_stop=true を付け、1) 判定＆出力作成'
     ].join('\n')
   );
 }
@@ -396,12 +392,16 @@ function convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config) {
       return;
     }
 
+    const asin = String(r['ASIN（情報提供のみ）'] || '').trim();
+    const sku = String(r['SKU'] || '').trim();
+    const productKey = asin || boostInfo.productKey || sku;
+
     converted.push({
       boost_campaign_id: campaignId,
       boost_campaign_name: campaignName,
       boost_ad_group_id: String(r['広告グループID'] || '').trim(),
       boost_ad_group_name: String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim(),
-      product_key: boostInfo.productKey || String(r['ASIN（情報提供のみ）'] || r['SKU'] || '').trim(),
+      product_key: productKey,
       product_label: boostInfo.productLabel || String(r['SKU'] || '').trim(),
       target_type: targetType,
       target_text: targetText,
@@ -831,7 +831,9 @@ function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows) {
     ).isBoost;
     if (!isBoost) return;
 
-    const productKey = String(r['ASIN（情報提供のみ）'] || r['SKU'] || r['広告グループ名'] || campaignId).trim();
+    const asin = String(r['ASIN（情報提供のみ）'] || '').trim();
+    const sku = String(r['SKU'] || '').trim();
+    const productKey = asin || sku;
     const productLabel = String(r['SKU'] || '').trim();
     if (!byId[campaignId]) {
       byId[campaignId] = {
@@ -842,7 +844,11 @@ function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows) {
         enabled: 'true'
       };
     } else {
-      if (!byId[campaignId].product_key && productKey) byId[campaignId].product_key = productKey;
+      if ((!byId[campaignId].product_key || looksLikeNumericId_(byId[campaignId].product_key)) && asin) {
+        byId[campaignId].product_key = asin;
+      } else if (!byId[campaignId].product_key && productKey) {
+        byId[campaignId].product_key = productKey;
+      }
       if (!byId[campaignId].product_label && productLabel) byId[campaignId].product_label = productLabel;
     }
   });
@@ -899,38 +905,8 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
   return rows;
 }
 
-function mergeStopProductsWithCandidates_(existingRows, boostCampaignRows) {
-  const byKey = {};
-
-  existingRows.forEach(function(r) {
-    const key = String(r.product_key || '').trim();
-    if (!key) return;
-    byKey[key] = {
-      product_key: key,
-      product_label: String(r.product_label || '').trim(),
-      approved_to_stop: String(r.approved_to_stop || '').trim(),
-      note: String(r.note || '').trim()
-    };
-  });
-
-  boostCampaignRows.forEach(function(r) {
-    const key = String(r.product_key || '').trim();
-    if (!key) return;
-    if (!byKey[key]) {
-      byKey[key] = {
-        product_key: key,
-        product_label: String(r.product_label || '').trim(),
-        approved_to_stop: 'false',
-        note: 'auto_from_raw'
-      };
-    } else if (!byKey[key].product_label && r.product_label) {
-      byKey[key].product_label = String(r.product_label).trim();
-    }
-  });
-
-  return Object.keys(byKey)
-    .sort()
-    .map(function(k) { return byKey[k]; });
+function looksLikeNumericId_(value) {
+  return /^\d{6,}$/.test(String(value || '').trim());
 }
 
 function buildBoostCampaignMap_(rows) {

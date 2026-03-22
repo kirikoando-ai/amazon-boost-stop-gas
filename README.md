@@ -234,8 +234,8 @@ Windows環境などで必要な場合のみ利用する。
   - `input_boost_campaigns`（BoostキャンペーンIDと product_key 候補）
   - `input_mapping`（通常キャンペーンの exact キーワード / 商品ターゲティングを候補化）
   - `input_boost`（判定対象行）
-  - `input_stop_products`（候補を `approved_to_stop=false` で追記）
-- 手入力が必要なのは `input_stop_products.approved_to_stop` の承認フラグのみ（必要に応じて `input_mapping` 微修正）
+- `input_stop_products` は自動更新しない（停止ASINは手入力で指定）
+- 手入力が必要なのは `input_stop_products`（停止ASIN + `approved_to_stop=true`）（必要に応じて `input_mapping` 微修正）
 
 ## 運用上の注意
 - 新規SKUが多い週は、まず`output_blockers`を0にしてから停止実行
@@ -252,7 +252,7 @@ Windows環境などで必要な場合のみ利用する。
 - Amazonバルクの `スポンサープロダクト広告キャンペーン` シートを `CSV UTF-8` で保存したか確認
 - そのCSVを `input_bulk_sp_raw` にインポートしたか確認
 - `0.4) RAWから必須inputを自動作成` を先に実行
-- `input_boost` に `product_key` が欠損していないか確認
+- `input_boost.product_key` がASINになっているか確認（停止指定はASIN前提）
 - `input_stop_products` の承認フラグが `true/1/yes` か確認
 - `output_blockers` が0件になるまで再実行
 - 最終的に `output_bulk_sp` をアップロード
