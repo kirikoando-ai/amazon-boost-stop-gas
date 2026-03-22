@@ -2,6 +2,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Boost Ops')
     .addItem('0) シート初期化', 'setupSheets')
+    .addItem('0.1) config推奨値を再作成', 'setupConfigPresetsOnly')
     .addItem('0.5) SP生データをinput_boostへ変換', 'convertRawSpBulkToInputBoost')
     .addItem('0.6) 外部シートのSPデータを変換', 'convertExternalSpBulkToInputBoost')
     .addSeparator()
@@ -194,6 +195,13 @@ function setupSheets() {
   writeDefaultConfig_(ss.getSheetByName('config'));
   writeConfigPresets_(ss.getSheetByName('config_presets'));
   SpreadsheetApp.getUi().alert('シート初期化が完了しました。config_presets で保守/標準/攻めを確認し、config に採用値を入力してから「判定＆出力作成」を実行してください。');
+}
+
+function setupConfigPresetsOnly() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureSheetWithHeaders_(ss, 'config_presets', ['preset', 'key', 'value', 'note', 'recommended_for']);
+  writeConfigPresets_(ss.getSheetByName('config_presets'));
+  SpreadsheetApp.getUi().alert('config_presets を更新しました。config は変更していません。');
 }
 
 function convertRawSpBulkToInputBoost() {
