@@ -555,7 +555,11 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     const cvr = clicks > 0 ? (orders / clicks) * 100 : 0;
 
     unitMap[unitKey].impressions += impressions;
-    if (unitMap[unitKey].impressions >= config.min_impressions_to_stop) {
+    // 停止承認制御が有効な場合は、input_stop_products 承認済み時点で停止対象にする。
+    // 露出条件はクライアント判断を優先し、システム側ではゲートにしない。
+    if (config.require_stop_approval) {
+      unitMap[unitKey].exposureEligible = true;
+    } else if (unitMap[unitKey].impressions >= config.min_impressions_to_stop) {
       unitMap[unitKey].exposureEligible = true;
     }
 
