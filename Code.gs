@@ -451,7 +451,7 @@ function runBoostStopWorkflow() {
     [
       '判定が完了しました。',
       '移行行: ' + result.summary.migration_rows,
-      '停止行: ' + result.summary.pause_rows,
+      'アーカイブ行: ' + result.summary.pause_rows,
       'ブロッカー: ' + result.summary.blocker_rows,
       'SP一括行: ' + result.summary.bulk_sp_rows
     ].join('\n')
@@ -540,9 +540,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
       unitMap[unitKey] = {
         row: r,
         impressions: 0,
-        exposureEligible: false,
-        hasBlocker: false,
-        blockerReasons: []
+        exposureEligible: false
       };
     }
 
@@ -585,19 +583,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     const destination = mapping[key];
 
     if (!destination) {
-      unitMap[unitKey].hasBlocker = true;
-      unitMap[unitKey].blockerReasons.push('mapping_not_found');
-      blockers.push({
-        blocker_type: 'migration_required_but_mapping_missing',
-        boost_campaign_id: r.boost_campaign_id,
-        boost_campaign_name: r.boost_campaign_name,
-        boost_ad_group_id: r.boost_ad_group_id,
-        boost_ad_group_name: r.boost_ad_group_name,
-        target_type: r.target_type,
-        target_text: r.target_text,
-        reason: '好調ターゲットだが input_mapping に移行先がないため停止不可',
-        required_action: 'input_mapping に移行先（通常Campaign/AdGroup）を設定'
-      });
+      // 移行先が無い場合は移行をスキップ（Boostアーカイブは継続）
       return;
     }
 
@@ -645,21 +631,18 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     if (!unit.exposureEligible) {
       return;
     }
-    if (unit.hasBlocker) {
-      return;
-    }
 
     pauses.push({
-      action: 'pause_boost',
+      action: 'archive_boost',
       entity: config.pause_level === 'campaign' ? 'Campaign' : 'AdGroup',
       operation: 'update',
-      state: 'paused',
+      state: 'archived',
       boost_campaign_id: unit.row.boost_campaign_id,
       boost_campaign_name: unit.row.boost_campaign_name,
       boost_ad_group_id: unit.row.boost_ad_group_id,
       boost_ad_group_name: unit.row.boost_ad_group_name,
       pause_level: config.pause_level,
-      reason: '露出確認済みかつ移行必須ターゲットの移行クリア',
+      reason: '露出確認済みのためBoostをアーカイブ',
       unit_impressions: round2_(unit.impressions)
     });
   });
@@ -743,7 +726,7 @@ function buildBulkSpRows_(migrations, pauses, config) {
     row['広告グループID'] = p.pause_level === 'campaign' ? '' : p.boost_ad_group_id;
     row['キャンペーン名'] = p.boost_campaign_name;
     row['広告グループ名'] = p.pause_level === 'campaign' ? '' : p.boost_ad_group_name;
-    row['ステータス'] = 'paused';
+    row['ステータス'] = normalizeBulkState_(p.state || 'archived');
     rows.push(row);
   });
 
