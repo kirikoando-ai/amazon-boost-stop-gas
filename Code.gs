@@ -223,6 +223,14 @@ function migrateConfigAcosToRoas() {
     min_roas_to_migrate: '移行判定の最低ROAS',
     min_cvr_to_migrate: '移行判定の最低CVR(%)',
     fallback_bid: 'CPC・default_bid が無いときの入札額',
+    use_roas_bid_multiplier: 'true なら ROAS帯に応じて入札係数を適用',
+    roas_bid_multiplier_ge_35: 'ROAS>=35 の入札係数',
+    roas_bid_multiplier_ge_25: '25<=ROAS<35 の入札係数',
+    roas_bid_multiplier_ge_20: '20<=ROAS<25 の入札係数',
+    roas_bid_multiplier_ge_15: '15<=ROAS<20 の入札係数',
+    roas_bid_multiplier_lt_15: 'ROAS<15 の入札係数',
+    min_bid: '移行入札の下限',
+    max_bid: '移行入札の上限',
     bulk_product_type: '一括アップロードの Product 列 (例: Sponsored Products)',
     boost_campaign_name_contains: '生データ変換時のBoost判定用キャンペーン名キーワード（カンマ区切り）',
     require_stop_approval: 'true なら input_stop_products で停止承認済み product_key のみ処理',
@@ -256,6 +264,14 @@ function migrateConfigAcosToRoas() {
     'min_roas_to_migrate',
     'min_cvr_to_migrate',
     'fallback_bid',
+    'use_roas_bid_multiplier',
+    'roas_bid_multiplier_ge_35',
+    'roas_bid_multiplier_ge_25',
+    'roas_bid_multiplier_ge_20',
+    'roas_bid_multiplier_ge_15',
+    'roas_bid_multiplier_lt_15',
+    'min_bid',
+    'max_bid',
     'bulk_product_type',
     'boost_campaign_name_contains',
     'require_stop_approval',
@@ -622,7 +638,8 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUni
     migrationDedup[dedupKey] = true;
 
     const defaultBid = toNumber_(destination.default_bid);
-    const bid = defaultBid > 0 ? defaultBid : (cpc > 0 ? cpc : config.fallback_bid);
+    const baseBid = defaultBid > 0 ? defaultBid : (cpc > 0 ? cpc : config.fallback_bid);
+    const bid = calcMigrationBid_(baseBid, roas, config);
 
     migrations.push({
       action: 'add_to_normal',
@@ -1269,6 +1286,14 @@ function loadConfig_(sheet) {
     ),
     min_cvr_to_migrate: toNumber_(config.min_cvr_to_migrate),
     fallback_bid: toNumber_(config.fallback_bid),
+    use_roas_bid_multiplier: toBoolean_(config.use_roas_bid_multiplier),
+    roas_bid_multiplier_ge_35: toNumber_(config.roas_bid_multiplier_ge_35),
+    roas_bid_multiplier_ge_25: toNumber_(config.roas_bid_multiplier_ge_25),
+    roas_bid_multiplier_ge_20: toNumber_(config.roas_bid_multiplier_ge_20),
+    roas_bid_multiplier_ge_15: toNumber_(config.roas_bid_multiplier_ge_15),
+    roas_bid_multiplier_lt_15: toNumber_(config.roas_bid_multiplier_lt_15),
+    min_bid: toNumber_(config.min_bid),
+    max_bid: toNumber_(config.max_bid),
     bulk_product_type: String(config.bulk_product_type || 'Sponsored Products').trim(),
     boost_campaign_name_contains_tokens: String(config.boost_campaign_name_contains || 'boost,ブースト')
       .split(',')
@@ -1293,6 +1318,14 @@ function defaultConfig_() {
     min_roas_to_migrate: 2.86,
     min_cvr_to_migrate: 8,
     fallback_bid: 45,
+    use_roas_bid_multiplier: true,
+    roas_bid_multiplier_ge_35: 0.85,
+    roas_bid_multiplier_ge_25: 0.75,
+    roas_bid_multiplier_ge_20: 0.65,
+    roas_bid_multiplier_ge_15: 0.55,
+    roas_bid_multiplier_lt_15: 0.45,
+    min_bid: 20,
+    max_bid: 120,
     bulk_product_type: 'Sponsored Products',
     boost_campaign_name_contains: 'boost,ブースト',
     require_stop_approval: true,
@@ -1311,6 +1344,14 @@ function writeDefaultConfig_(sheet) {
     min_roas_to_migrate: '移行判定の最低ROAS',
     min_cvr_to_migrate: '移行判定の最低CVR(%)',
     fallback_bid: 'CPC・default_bid が無いときの入札額',
+    use_roas_bid_multiplier: 'true なら ROAS帯に応じて入札係数を適用',
+    roas_bid_multiplier_ge_35: 'ROAS>=35 の入札係数',
+    roas_bid_multiplier_ge_25: '25<=ROAS<35 の入札係数',
+    roas_bid_multiplier_ge_20: '20<=ROAS<25 の入札係数',
+    roas_bid_multiplier_ge_15: '15<=ROAS<20 の入札係数',
+    roas_bid_multiplier_lt_15: 'ROAS<15 の入札係数',
+    min_bid: '移行入札の下限',
+    max_bid: '移行入札の上限',
     bulk_product_type: '一括アップロードの Product 列 (例: Sponsored Products)',
     boost_campaign_name_contains: '生データ変換時のBoost判定用キャンペーン名キーワード（カンマ区切り）',
     require_stop_approval: 'true なら input_stop_products で停止承認済み product_key のみ処理',
@@ -1335,6 +1376,14 @@ function writeConfigPresets_(sheet) {
     min_roas_to_migrate: '移行判定の最低ROAS',
     min_cvr_to_migrate: '移行判定の最低CVR(%)',
     fallback_bid: 'CPC・default_bid が無いときの入札額',
+    use_roas_bid_multiplier: 'true なら ROAS帯に応じて入札係数を適用',
+    roas_bid_multiplier_ge_35: 'ROAS>=35 の入札係数',
+    roas_bid_multiplier_ge_25: '25<=ROAS<35 の入札係数',
+    roas_bid_multiplier_ge_20: '20<=ROAS<25 の入札係数',
+    roas_bid_multiplier_ge_15: '15<=ROAS<20 の入札係数',
+    roas_bid_multiplier_lt_15: 'ROAS<15 の入札係数',
+    min_bid: '移行入札の下限',
+    max_bid: '移行入札の上限',
     pause_level: 'ad_group または campaign',
     require_stop_approval: 'true なら input_stop_products 承認済みのみ処理'
   };
@@ -1350,6 +1399,14 @@ function writeConfigPresets_(sheet) {
         min_roas_to_migrate: 3.33,
         min_cvr_to_migrate: 10,
         fallback_bid: 40,
+        use_roas_bid_multiplier: true,
+        roas_bid_multiplier_ge_35: 0.8,
+        roas_bid_multiplier_ge_25: 0.7,
+        roas_bid_multiplier_ge_20: 0.6,
+        roas_bid_multiplier_ge_15: 0.5,
+        roas_bid_multiplier_lt_15: 0.4,
+        min_bid: 20,
+        max_bid: 110,
         pause_level: 'ad_group',
         require_stop_approval: true
       }
@@ -1364,6 +1421,14 @@ function writeConfigPresets_(sheet) {
         min_roas_to_migrate: 2.86,
         min_cvr_to_migrate: 8,
         fallback_bid: 45,
+        use_roas_bid_multiplier: true,
+        roas_bid_multiplier_ge_35: 0.85,
+        roas_bid_multiplier_ge_25: 0.75,
+        roas_bid_multiplier_ge_20: 0.65,
+        roas_bid_multiplier_ge_15: 0.55,
+        roas_bid_multiplier_lt_15: 0.45,
+        min_bid: 20,
+        max_bid: 120,
         pause_level: 'ad_group',
         require_stop_approval: true
       }
@@ -1378,6 +1443,14 @@ function writeConfigPresets_(sheet) {
         min_roas_to_migrate: 2.22,
         min_cvr_to_migrate: 5,
         fallback_bid: 50,
+        use_roas_bid_multiplier: true,
+        roas_bid_multiplier_ge_35: 0.9,
+        roas_bid_multiplier_ge_25: 0.8,
+        roas_bid_multiplier_ge_20: 0.7,
+        roas_bid_multiplier_ge_15: 0.6,
+        roas_bid_multiplier_lt_15: 0.5,
+        min_bid: 20,
+        max_bid: 130,
         pause_level: 'ad_group',
         require_stop_approval: true
       }
@@ -1496,6 +1569,36 @@ function toBoolean_(value) {
 
 function round2_(num) {
   return Math.round(num * 100) / 100;
+}
+
+function calcMigrationBid_(baseBid, roas, config) {
+  let bid = toNumber_(baseBid);
+  if (bid <= 0) {
+    return 0;
+  }
+
+  if (config.use_roas_bid_multiplier) {
+    const m = getRoasBidMultiplier_(roas, config);
+    bid = bid * m;
+  }
+
+  if (config.min_bid > 0 && bid < config.min_bid) {
+    bid = config.min_bid;
+  }
+  if (config.max_bid > 0 && bid > config.max_bid) {
+    bid = config.max_bid;
+  }
+
+  return round2_(bid);
+}
+
+function getRoasBidMultiplier_(roas, config) {
+  const r = toNumber_(roas);
+  if (r >= 35) return config.roas_bid_multiplier_ge_35 || 1;
+  if (r >= 25) return config.roas_bid_multiplier_ge_25 || 1;
+  if (r >= 20) return config.roas_bid_multiplier_ge_20 || 1;
+  if (r >= 15) return config.roas_bid_multiplier_ge_15 || 1;
+  return config.roas_bid_multiplier_lt_15 || 1;
 }
 
 function normalizeProductKey_(value) {
