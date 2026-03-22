@@ -3,6 +3,7 @@ function onOpen() {
     .createMenu('Boost Ops')
     .addItem('0) シート初期化', 'setupSheets')
     .addItem('0.5) SP生データをinput_boostへ変換', 'convertRawSpBulkToInputBoost')
+    .addItem('0.6) 外部シートのSPデータを変換', 'convertExternalSpBulkToInputBoost')
     .addSeparator()
     .addItem('1) 判定＆出力作成', 'runBoostStopWorkflow')
     .addItem('1.5) Amazon SP一括行を再生成', 'buildBulkSpSheet')
@@ -204,6 +205,55 @@ function convertRawSpBulkToInputBoost() {
     throw new Error('input_bulk_sp_raw にデータがありません。SPバルクの2枚目シートを貼り付けてください。');
   }
 
+  const converted = convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config);
+
+  const inputBoostSheet = ss.getSheetByName('input_boost');
+  writeRows_(inputBoostSheet, converted);
+
+  SpreadsheetApp.getUi().alert(
+    [
+      'input_boost 変換が完了しました。',
+      '変換行数: ' + converted.length,
+      '対象: SP + キーワード/商品ターゲティング + Boost判定一致'
+    ].join('\n')
+  );
+}
+
+function convertExternalSpBulkToInputBoost() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = loadConfig_(ss.getSheetByName('config'));
+  const boostCampaignRows = getRows_(ss.getSheetByName('input_boost_campaigns'));
+  const boostCampaignMap = buildBoostCampaignMap_(boostCampaignRows);
+
+  if (!config.source_spreadsheet_id) {
+    throw new Error('config.source_spreadsheet_id が未設定です。外部データ元スプレッドシートIDを設定してください。');
+  }
+
+  const sourceSs = SpreadsheetApp.openById(config.source_spreadsheet_id);
+  const sourceSheet = sourceSs.getSheetByName(config.source_sp_sheet_name);
+  if (!sourceSheet) {
+    throw new Error('外部シートが見つかりません: ' + config.source_sp_sheet_name);
+  }
+
+  const sourceRows = getRows_(sourceSheet);
+  if (!sourceRows.length) {
+    throw new Error('外部シートにデータがありません。');
+  }
+
+  const converted = convertSpRowsToInputBoost_(sourceRows, boostCampaignMap, config);
+
+  writeRows_(ss.getSheetByName('input_boost'), converted);
+
+  SpreadsheetApp.getUi().alert(
+    [
+      '外部シートから input_boost 変換が完了しました。',
+      '元シート: ' + config.source_sp_sheet_name,
+      '変換行数: ' + converted.length
+    ].join('\n')
+  );
+}
+
+function convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config) {
   const converted = [];
 
   rawRows.forEach(function(r) {
@@ -252,16 +302,7 @@ function convertRawSpBulkToInputBoost() {
     });
   });
 
-  const inputBoostSheet = ss.getSheetByName('input_boost');
-  writeRows_(inputBoostSheet, converted);
-
-  SpreadsheetApp.getUi().alert(
-    [
-      'input_boost 変換が完了しました。',
-      '変換行数: ' + converted.length,
-      '対象: SP + キーワード/商品ターゲティング + Boost判定一致'
-    ].join('\n')
-  );
+  return converted;
 }
 
 function runBoostStopWorkflow() {
@@ -790,6 +831,8 @@ function loadConfig_(sheet) {
         return v !== '';
       }),
     require_stop_approval: toBoolean_(config.require_stop_approval),
+    source_spreadsheet_id: String(config.source_spreadsheet_id || '').trim(),
+    source_sp_sheet_name: String(config.source_sp_sheet_name || 'スポンサープロダクト広告キャンペーン').trim(),
     pause_level: String(config.pause_level || 'ad_group').toLowerCase() === 'campaign' ? 'campaign' : 'ad_group'
   };
 }
@@ -805,6 +848,8 @@ function defaultConfig_() {
     bulk_product_type: 'Sponsored Products',
     boost_campaign_name_contains: 'boost,ブースト',
     require_stop_approval: true,
+    source_spreadsheet_id: '',
+    source_sp_sheet_name: 'スポンサープロダクト広告キャンペーン',
     pause_level: 'ad_group'
   };
 }
@@ -821,6 +866,8 @@ function writeDefaultConfig_(sheet) {
     bulk_product_type: '一括アップロードの Product 列 (例: Sponsored Products)',
     boost_campaign_name_contains: '生データ変換時のBoost判定用キャンペーン名キーワード（カンマ区切り）',
     require_stop_approval: 'true なら input_stop_products で停止承認済み product_key のみ処理',
+    source_spreadsheet_id: '外部取り込み元スプレッドシートID（0.6利用時）',
+    source_sp_sheet_name: '外部取り込み元のSPシート名（0.6利用時）',
     pause_level: 'ad_group または campaign'
   };
 
