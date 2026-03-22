@@ -516,10 +516,12 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
   const blockers = [];
   const unitMap = {};
   const migrationDedup = {};
+  const approvedUnits = buildApprovedUnits_(boostRows, approvedStopKeys, config.pause_level);
   let skippedRowsByStopControl = 0;
 
   boostRows.forEach(function(r) {
-    const stopControl = shouldProcessRowByStopApproval_(r, config, approvedStopKeys);
+    const unitKey = makePauseUnitKey_(r, config.pause_level);
+    const stopControl = shouldProcessRowByStopApproval_(r, unitKey, config, approvedStopKeys, approvedUnits);
     if (!stopControl.allowed) {
       skippedRowsByStopControl += 1;
       if (stopControl.reason === 'missing_product_key') {
@@ -538,7 +540,6 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
       return;
     }
 
-    const unitKey = makePauseUnitKey_(r, config.pause_level);
     if (!unitMap[unitKey]) {
       unitMap[unitKey] = {
         row: r,
@@ -700,18 +701,31 @@ function loadApprovedStopKeys_(rows) {
   return keys;
 }
 
-function shouldProcessRowByStopApproval_(row, config, approvedStopKeys) {
+function shouldProcessRowByStopApproval_(row, unitKey, config, approvedStopKeys, approvedUnits) {
   if (!config.require_stop_approval) {
     return { allowed: true, reason: 'approval_not_required' };
   }
   const key = String(row.product_key || '').trim();
-  if (!key) {
-    return { allowed: false, reason: 'missing_product_key' };
+  if (key && approvedStopKeys[key]) {
+    return { allowed: true, reason: 'approved_product' };
   }
-  if (!approvedStopKeys[key]) {
-    return { allowed: false, reason: 'not_approved_product' };
+  if (approvedUnits[unitKey]) {
+    return { allowed: true, reason: 'approved_unit_by_variation' };
   }
-  return { allowed: true, reason: 'approved_product' };
+  return { allowed: false, reason: key ? 'not_approved_product' : 'missing_product_key' };
+}
+
+function buildApprovedUnits_(boostRows, approvedStopKeys, pauseLevel) {
+  const units = {};
+  boostRows.forEach(function(r) {
+    const key = String(r.product_key || '').trim();
+    if (!key || !approvedStopKeys[key]) {
+      return;
+    }
+    const unitKey = makePauseUnitKey_(r, pauseLevel);
+    units[unitKey] = true;
+  });
+  return units;
 }
 
 function buildBulkSpRows_(migrations, pauses, config) {
