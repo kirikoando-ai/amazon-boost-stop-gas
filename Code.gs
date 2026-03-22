@@ -4,6 +4,7 @@ function onOpen() {
     .addItem('0) シート初期化', 'setupSheets')
     .addItem('0.1) config推奨値を再作成', 'setupConfigPresetsOnly')
     .addItem('0.2) configをROAS項目へ変換', 'migrateConfigAcosToRoas')
+    .addItem('0.4) RAWから必須inputを自動作成', 'autoBuildInputsFromRaw')
     .addItem('0.5) SP生データをinput_boostへ変換', 'convertRawSpBulkToInputBoost')
     .addItem('0.6) 外部シートのSPデータを変換', 'convertExternalSpBulkToInputBoost')
     .addSeparator()
@@ -293,6 +294,42 @@ function convertRawSpBulkToInputBoost() {
       'input_boost 変換が完了しました。',
       '変換行数: ' + converted.length,
       '対象: SP + キーワード/商品ターゲティング + Boost判定一致'
+    ].join('\n')
+  );
+}
+
+function autoBuildInputsFromRaw() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = loadConfig_(ss.getSheetByName('config'));
+  const rawRows = getRows_(ss.getSheetByName('input_bulk_sp_raw'));
+  if (!rawRows.length) {
+    throw new Error('input_bulk_sp_raw にデータがありません。先にRAWを取り込んでください。');
+  }
+
+  const existingBoostCampaignRows = getRows_(ss.getSheetByName('input_boost_campaigns'));
+  const existingStopRows = getRows_(ss.getSheetByName('input_stop_products'));
+
+  const autoBoostCampaignRows = buildBoostCampaignRowsFromRaw_(rawRows, config, existingBoostCampaignRows);
+  writeRows_(ss.getSheetByName('input_boost_campaigns'), autoBoostCampaignRows);
+
+  const autoMappingRows = buildMappingRowsFromRaw_(rawRows, config, autoBoostCampaignRows);
+  writeRows_(ss.getSheetByName('input_mapping'), autoMappingRows);
+
+  const mergedStopRows = mergeStopProductsWithCandidates_(existingStopRows, autoBoostCampaignRows);
+  writeRows_(ss.getSheetByName('input_stop_products'), mergedStopRows);
+
+  const boostCampaignMap = buildBoostCampaignMap_(autoBoostCampaignRows);
+  const convertedBoost = convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config);
+  writeRows_(ss.getSheetByName('input_boost'), convertedBoost);
+
+  SpreadsheetApp.getUi().alert(
+    [
+      'RAWから必須inputの自動作成が完了しました。',
+      'input_boost_campaigns: ' + autoBoostCampaignRows.length + ' 行',
+      'input_mapping: ' + autoMappingRows.length + ' 行',
+      'input_stop_products: ' + mergedStopRows.length + ' 行（承認済みは維持）',
+      'input_boost: ' + convertedBoost.length + ' 行',
+      '次: input_stop_products で approved_to_stop=true を付けて 1) 判定＆出力作成'
     ].join('\n')
   );
 }
@@ -761,6 +798,139 @@ function buildMapping_(rows) {
     map[key] = r;
   });
   return map;
+}
+
+function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows) {
+  const byId = {};
+
+  existingRows.forEach(function(r) {
+    const id = String(r.boost_campaign_id || '').trim();
+    if (!id) return;
+    byId[id] = {
+      boost_campaign_id: id,
+      boost_campaign_name_contains: String(r.boost_campaign_name_contains || '').trim(),
+      product_key: String(r.product_key || '').trim(),
+      product_label: String(r.product_label || '').trim(),
+      enabled: String(r.enabled || 'true').trim() || 'true'
+    };
+  });
+
+  rawRows.forEach(function(r) {
+    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') {
+      return;
+    }
+    const campaignId = String(r['キャンペーンID'] || '').trim();
+    const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
+    if (!campaignId) return;
+
+    const isBoost = resolveBoostCampaign_(
+      campaignId,
+      campaignName,
+      { byId: {}, containsList: [] },
+      config
+    ).isBoost;
+    if (!isBoost) return;
+
+    const productKey = String(r['ASIN（情報提供のみ）'] || r['SKU'] || r['広告グループ名'] || campaignId).trim();
+    const productLabel = String(r['SKU'] || '').trim();
+    if (!byId[campaignId]) {
+      byId[campaignId] = {
+        boost_campaign_id: campaignId,
+        boost_campaign_name_contains: '',
+        product_key: productKey,
+        product_label: productLabel,
+        enabled: 'true'
+      };
+    } else {
+      if (!byId[campaignId].product_key && productKey) byId[campaignId].product_key = productKey;
+      if (!byId[campaignId].product_label && productLabel) byId[campaignId].product_label = productLabel;
+    }
+  });
+
+  return Object.keys(byId)
+    .sort()
+    .map(function(id) { return byId[id]; });
+}
+
+function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
+  const boostMap = buildBoostCampaignMap_(boostCampaignRows);
+  const seen = {};
+  const rows = [];
+
+  rawRows.forEach(function(r) {
+    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
+
+    const entity = String(r['エンティティ'] || '').trim();
+    const targetType = normalizeTargetTypeFromEntity_(entity);
+    if (!targetType) return;
+
+    const campaignId = String(r['キャンペーンID'] || '').trim();
+    const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
+    const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
+    if (boostInfo.isBoost) return;
+
+    const targetText = targetType === 'keyword'
+      ? String(r['キーワードテキスト'] || '').trim()
+      : String(r['商品ターゲティング式'] || r['解決済みの商品ターゲティング式（情報提供のみ）'] || '').trim();
+    if (!targetText) return;
+
+    if (targetType === 'keyword') {
+      const mt = normalizeMatchType_(String(r['マッチタイプ'] || '').trim());
+      if (mt !== 'exact') return;
+    }
+
+    const targetKey = targetType + '::' + targetText.toLowerCase();
+    if (seen[targetKey]) return;
+    seen[targetKey] = true;
+
+    rows.push({
+      target_key: targetKey,
+      target_type: targetType,
+      target_text: targetText,
+      normal_campaign_id: campaignId,
+      normal_campaign_name: campaignName,
+      normal_ad_group_id: String(r['広告グループID'] || '').trim(),
+      normal_ad_group_name: String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim(),
+      default_bid: toNumber_(r['入札額'] || r['広告グループの入札額の初期値'] || ''),
+      state: 'enabled'
+    });
+  });
+
+  return rows;
+}
+
+function mergeStopProductsWithCandidates_(existingRows, boostCampaignRows) {
+  const byKey = {};
+
+  existingRows.forEach(function(r) {
+    const key = String(r.product_key || '').trim();
+    if (!key) return;
+    byKey[key] = {
+      product_key: key,
+      product_label: String(r.product_label || '').trim(),
+      approved_to_stop: String(r.approved_to_stop || '').trim(),
+      note: String(r.note || '').trim()
+    };
+  });
+
+  boostCampaignRows.forEach(function(r) {
+    const key = String(r.product_key || '').trim();
+    if (!key) return;
+    if (!byKey[key]) {
+      byKey[key] = {
+        product_key: key,
+        product_label: String(r.product_label || '').trim(),
+        approved_to_stop: 'false',
+        note: 'auto_from_raw'
+      };
+    } else if (!byKey[key].product_label && r.product_label) {
+      byKey[key].product_label = String(r.product_label).trim();
+    }
+  });
+
+  return Object.keys(byKey)
+    .sort()
+    .map(function(k) { return byKey[k]; });
 }
 
 function buildBoostCampaignMap_(rows) {
