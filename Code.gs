@@ -41,6 +41,8 @@ function setupSheets() {
     'target_key',
     'target_type',
     'target_text',
+    'source_product_key',
+    'source_boost_ad_group_name',
     'normal_campaign_id',
     'normal_campaign_name',
     'normal_ad_group_id',
@@ -313,6 +315,7 @@ function autoBuildInputsFromRaw() {
   const autoBoostCampaignRows = buildBoostCampaignRowsFromRaw_(rawRows, config, existingBoostCampaignRows, asinIndex);
   writeRows_(ss.getSheetByName('input_boost_campaigns'), autoBoostCampaignRows);
 
+  ensureSheetHasColumns_(ss.getSheetByName('input_mapping'), ['source_product_key', 'source_boost_ad_group_name']);
   const autoMappingRows = buildMappingRowsFromRaw_(rawRows, config, autoBoostCampaignRows);
   writeRows_(ss.getSheetByName('input_mapping'), autoMappingRows);
 
@@ -584,7 +587,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     }
 
     const key = getTargetKey_(r);
-    const destination = mapping[key];
+    const destination = resolveMappingDestination_(mapping, key, r);
 
     if (!destination) {
       blockers.push({
@@ -797,15 +800,28 @@ function normalizeBulkState_(state) {
 }
 
 function buildMapping_(rows) {
-  const map = {};
+  const byTarget = {};
+  const byGroupProduct = {};
   rows.forEach(function(r) {
     const key = getTargetKey_(r);
-    if (!key) {
-      return;
+    if (key) {
+      if (!byTarget[key]) {
+        byTarget[key] = [];
+      }
+      byTarget[key].push(r);
     }
-    map[key] = r;
+
+    const sourceProduct = String(r.source_product_key || '').trim();
+    const sourceAdGroup = String(r.source_boost_ad_group_name || '').trim();
+    if (sourceProduct && sourceAdGroup) {
+      const groupKey = sourceProduct + '|' + normalizeAdGroupNameForMatch_(sourceAdGroup);
+      if (!byGroupProduct[groupKey]) {
+        byGroupProduct[groupKey] = [];
+      }
+      byGroupProduct[groupKey].push(r);
+    }
   });
-  return map;
+  return { byTarget: byTarget, byGroupProduct: byGroupProduct };
 }
 
 function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex) {
@@ -869,29 +885,38 @@ function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex
 
 function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
   const boostMap = buildBoostCampaignMap_(boostCampaignRows);
-  const boostAdGroupsByProduct = {};
+  const normalDestByGroupProduct = {};
   const seen = {};
   const rows = [];
   const asinIndex = buildAsinIndexFromRaw_(rawRows);
 
-  // 1) Boost側の product_key -> ad_group_name セットを構築
+  // 1) 通常側の移行先候補を構築（Manualのみ / boost・全商品・B2B除外）
   rawRows.forEach(function(r) {
     if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
     const campaignId = String(r['キャンペーンID'] || '').trim();
     const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
     const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
-    if (!boostInfo.isBoost) return;
+    if (boostInfo.isBoost) return;
+    if (isExcludedDestinationCampaignName_(campaignName)) return;
+    if (!isManualCampaignRow_(r)) return;
 
     const productKey = getRowProductKeyFromRaw_(r, asinIndex, boostInfo.productKey);
-    const adGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
-    if (!productKey || !adGroupName) return;
-    if (!boostAdGroupsByProduct[productKey]) {
-      boostAdGroupsByProduct[productKey] = [];
+    const normalAdGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
+    if (!productKey || !normalAdGroupName) return;
+    const gk = productKey + '|' + normalizeAdGroupNameForMatch_(normalAdGroupName);
+    if (!normalDestByGroupProduct[gk]) {
+      normalDestByGroupProduct[gk] = {
+        normal_campaign_id: campaignId,
+        normal_campaign_name: campaignName,
+        normal_ad_group_id: String(r['広告グループID'] || '').trim(),
+        normal_ad_group_name: normalAdGroupName,
+        default_bid: toNumber_(r['入札額'] || r['広告グループの入札額の初期値'] || ''),
+        state: 'enabled'
+      };
     }
-    boostAdGroupsByProduct[productKey].push(adGroupName);
   });
 
-  // 2) 通常側から移行先候補を抽出（Manualのみ / boost除外 / 同名広告グループ一致）
+  // 2) Boost側キーワードを起点にマッピングを作成（同一ASIN×同名広告グループ）
   rawRows.forEach(function(r) {
     if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
 
@@ -902,36 +927,35 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
     const campaignId = String(r['キャンペーンID'] || '').trim();
     const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
     const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
-    if (boostInfo.isBoost) return;
-    if (isExcludedDestinationCampaignName_(campaignName)) return;
-    if (!isManualCampaignRow_(r)) return;
+    if (!boostInfo.isBoost) return;
 
     const targetText = String(r['キーワードテキスト'] || '').trim();
     if (!targetText) return;
 
-    const mt = normalizeMatchType_(String(r['マッチタイプ'] || '').trim());
-    if (mt !== 'exact') return;
-
-    const productKey = getRowProductKeyFromRaw_(r, asinIndex, '');
-    const boostAdGroupNames = boostAdGroupsByProduct[productKey] || [];
-    const normalAdGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
-    if (!productKey || !boostAdGroupNames.length || !normalAdGroupName) return;
-    if (!adGroupSetHasMatch_(boostAdGroupNames, normalAdGroupName)) return;
+    const productKey = getRowProductKeyFromRaw_(r, asinIndex, boostInfo.productKey);
+    const boostAdGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
+    if (!productKey || !boostAdGroupName) return;
+    const gk = productKey + '|' + normalizeAdGroupNameForMatch_(boostAdGroupName);
+    const dest = normalDestByGroupProduct[gk];
+    if (!dest) return;
 
     const targetKey = targetType + '::' + targetText.toLowerCase();
-    if (seen[targetKey]) return;
-    seen[targetKey] = true;
+    const dedupKey = [targetKey, productKey, boostAdGroupName, dest.normal_campaign_id, dest.normal_ad_group_id].join('|');
+    if (seen[dedupKey]) return;
+    seen[dedupKey] = true;
 
     rows.push({
       target_key: targetKey,
       target_type: targetType,
       target_text: targetText,
-      normal_campaign_id: campaignId,
-      normal_campaign_name: campaignName,
-      normal_ad_group_id: String(r['広告グループID'] || '').trim(),
-      normal_ad_group_name: String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim(),
-      default_bid: toNumber_(r['入札額'] || r['広告グループの入札額の初期値'] || ''),
-      state: 'enabled'
+      source_product_key: productKey,
+      source_boost_ad_group_name: boostAdGroupName,
+      normal_campaign_id: dest.normal_campaign_id,
+      normal_campaign_name: dest.normal_campaign_name,
+      normal_ad_group_id: dest.normal_ad_group_id,
+      normal_ad_group_name: dest.normal_ad_group_name,
+      default_bid: dest.default_bid,
+      state: dest.state
     });
   });
 
@@ -984,6 +1008,42 @@ function adGroupSetHasMatch_(adGroupNames, targetName) {
   return adGroupNames.some(function(name) {
     return adGroupNamesRoughlyMatch_(name, targetName);
   });
+}
+
+function resolveMappingDestination_(mapping, targetKey, boostRow) {
+  const byTarget = mapping.byTarget[targetKey] || [];
+  if (byTarget.length === 1) {
+    return byTarget[0];
+  }
+
+  const groupKey = String(boostRow.product_key || '').trim() + '|' + normalizeAdGroupNameForMatch_(String(boostRow.boost_ad_group_name || '').trim());
+  const byGroup = mapping.byGroupProduct[groupKey] || [];
+  if (byGroup.length === 1) {
+    return byGroup[0];
+  }
+
+  if (byTarget.length > 1) {
+    const exactSource = byTarget.filter(function(r) {
+      return String(r.source_product_key || '').trim() === String(boostRow.product_key || '').trim() &&
+        adGroupNamesRoughlyMatch_(String(r.source_boost_ad_group_name || '').trim(), String(boostRow.boost_ad_group_name || '').trim());
+    });
+    if (exactSource.length === 1) {
+      return exactSource[0];
+    }
+  }
+
+  return null;
+}
+
+function ensureSheetHasColumns_(sheet, requiredHeaders) {
+  if (!sheet) return;
+  const lastCol = Math.max(1, sheet.getLastColumn());
+  const current = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const normalized = current.map(function(v) { return String(v || '').trim(); });
+  const missing = requiredHeaders.filter(function(h) { return normalized.indexOf(h) === -1; });
+  if (!missing.length) return;
+  const startCol = normalized.length + 1;
+  sheet.getRange(1, startCol, 1, missing.length).setValues([missing]);
 }
 
 function buildAsinIndexFromRaw_(rawRows) {
