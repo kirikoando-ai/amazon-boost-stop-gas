@@ -3,6 +3,7 @@ function onOpen() {
     .createMenu('Boost Ops')
     .addItem('0) シート初期化', 'setupSheets')
     .addItem('0.1) config推奨値を再作成', 'setupConfigPresetsOnly')
+    .addItem('0.2) configをROAS項目へ変換', 'migrateConfigAcosToRoas')
     .addItem('0.5) SP生データをinput_boostへ変換', 'convertRawSpBulkToInputBoost')
     .addItem('0.6) 外部シートのSPデータを変換', 'convertExternalSpBulkToInputBoost')
     .addSeparator()
@@ -202,6 +203,73 @@ function setupConfigPresetsOnly() {
   ensureSheetWithHeaders_(ss, 'config_presets', ['preset', 'key', 'value', 'note', 'recommended_for']);
   writeConfigPresets_(ss.getSheetByName('config_presets'));
   SpreadsheetApp.getUi().alert('config_presets を更新しました。config は変更していません。');
+}
+
+function migrateConfigAcosToRoas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('config');
+  if (!sheet) {
+    throw new Error('config シートがありません。先に「0) シート初期化」を実行してください。');
+  }
+
+  const rows = getRows_(sheet);
+  const notes = {
+    min_impressions_to_stop: '停止対象にする最低表示回数（Boost側の停止単位合計）',
+    min_clicks_to_migrate: '移行判定の最低クリック数',
+    min_orders_to_migrate: '移行判定の最低注文数',
+    min_roas_to_migrate: '移行判定の最低ROAS',
+    min_cvr_to_migrate: '移行判定の最低CVR(%)',
+    fallback_bid: 'CPC・default_bid が無いときの入札額',
+    bulk_product_type: '一括アップロードの Product 列 (例: Sponsored Products)',
+    boost_campaign_name_contains: '生データ変換時のBoost判定用キャンペーン名キーワード（カンマ区切り）',
+    require_stop_approval: 'true なら input_stop_products で停止承認済み product_key のみ処理',
+    source_spreadsheet_id: '外部取り込み元スプレッドシートID（0.6利用時）',
+    source_sp_sheet_name: '外部取り込み元のSPシート名（0.6利用時）',
+    pause_level: 'ad_group または campaign'
+  };
+
+  const map = {};
+  rows.forEach(function(r) {
+    const key = String(r.key || '').trim();
+    if (key) {
+      map[key] = String(r.value || '').trim();
+    }
+  });
+
+  if (!map.min_roas_to_migrate) {
+    const oldAcos = toNumber_(map.max_acos_to_migrate);
+    if (oldAcos > 0) {
+      map.min_roas_to_migrate = round2_(100 / oldAcos);
+    } else {
+      map.min_roas_to_migrate = defaultConfig_().min_roas_to_migrate;
+    }
+  }
+  delete map.max_acos_to_migrate;
+
+  const keyOrder = [
+    'min_impressions_to_stop',
+    'min_clicks_to_migrate',
+    'min_orders_to_migrate',
+    'min_roas_to_migrate',
+    'min_cvr_to_migrate',
+    'fallback_bid',
+    'bulk_product_type',
+    'boost_campaign_name_contains',
+    'require_stop_approval',
+    'source_spreadsheet_id',
+    'source_sp_sheet_name',
+    'pause_level'
+  ];
+
+  const output = keyOrder.map(function(key) {
+    return [key, map[key] != null ? map[key] : defaultConfig_()[key], notes[key] || ''];
+  });
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, 3).setValues([['key', 'value', 'note']]);
+  sheet.getRange(2, 1, output.length, 3).setValues(output);
+
+  SpreadsheetApp.getUi().alert('config を ROAS 項目へ変換しました。min_roas_to_migrate を確認してください。');
 }
 
 function convertRawSpBulkToInputBoost() {
