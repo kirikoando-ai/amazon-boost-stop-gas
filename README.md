@@ -237,6 +237,10 @@ Windows環境などで必要な場合のみ利用する。
   - `input_boost`（判定対象行）
 - `input_stop_products` は自動更新しない（停止ASINは手入力で指定）
 - 手入力が必要なのは `input_stop_products`（停止ASIN + `approved_to_stop=true`）（必要に応じて `input_mapping` 微修正）
+- 自動マッピング時の移行先除外: キャンペーン名に `全商品` / `B2B` を含むもの
+- キーワード移行の移行先: マニュアルキャンペーンのみ
+- 移行先広告グループ: Boost側と同名を優先
+- 広告グループ名の末尾英字ゆらぎ（色コード等）は近似一致として扱う
 
 ## 運用上の注意
 - 新規SKUが多い週は、まず`output_blockers`を0にしてから停止実行

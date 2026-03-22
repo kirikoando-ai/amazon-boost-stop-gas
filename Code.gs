@@ -41,6 +41,7 @@ function setupSheets() {
     'target_key',
     'target_type',
     'target_text',
+    'source_boost_ad_group_name',
     'normal_campaign_id',
     'normal_campaign_name',
     'normal_ad_group_id',
@@ -577,7 +578,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     }
 
     const key = getTargetKey_(r);
-    const destination = mapping[key];
+    const destination = resolveMappingDestination_(mapping, key, r);
 
     if (!destination) {
       unitMap[unitKey].hasBlocker = true;
@@ -590,8 +591,8 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
         boost_ad_group_name: r.boost_ad_group_name,
         target_type: r.target_type,
         target_text: r.target_text,
-        reason: '好調ターゲットだが input_mapping に移行先がないため停止不可',
-        required_action: 'input_mapping に移行先（通常Campaign/AdGroup）を設定'
+        reason: '好調ターゲットだが input_mapping に移行先がない/曖昧のため停止不可',
+        required_action: 'input_mapping に移行先（通常Campaign/AdGroup）を設定。source_boost_ad_group_name で対応付けを推奨'
       });
       return;
     }
@@ -801,9 +802,47 @@ function buildMapping_(rows) {
     if (!key) {
       return;
     }
-    map[key] = r;
+    if (!map[key]) {
+      map[key] = [];
+    }
+    map[key].push(r);
   });
   return map;
+}
+
+function resolveMappingDestination_(mapping, targetKey, boostRow) {
+  const candidates = mapping[targetKey] || [];
+  if (!candidates.length) {
+    return null;
+  }
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  const srcAdGroup = String(boostRow.boost_ad_group_name || '').trim();
+  const exact = candidates.filter(function(c) {
+    return String(c.source_boost_ad_group_name || '').trim() === srcAdGroup;
+  });
+  if (exact.length === 1) {
+    return exact[0];
+  }
+
+  const loose = candidates.filter(function(c) {
+    const src = String(c.source_boost_ad_group_name || '').trim();
+    return src && adGroupNamesRoughlyMatch_(src, srcAdGroup);
+  });
+  if (loose.length === 1) {
+    return loose[0];
+  }
+
+  const noSource = candidates.filter(function(c) {
+    return !String(c.source_boost_ad_group_name || '').trim();
+  });
+  if (noSource.length === 1) {
+    return noSource[0];
+  }
+
+  return null;
 }
 
 function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex) {
@@ -867,8 +906,8 @@ function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex
 
 function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
   const boostMap = buildBoostCampaignMap_(boostCampaignRows);
-  const seen = {};
-  const rows = [];
+  const boostRows = [];
+  const normalByTargetKey = {};
 
   rawRows.forEach(function(r) {
     if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
@@ -879,33 +918,73 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
 
     const campaignId = String(r['キャンペーンID'] || '').trim();
     const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
-    const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
-    if (boostInfo.isBoost) return;
+    const adGroupId = String(r['広告グループID'] || '').trim();
+    const adGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
 
     const targetText = targetType === 'keyword'
       ? String(r['キーワードテキスト'] || '').trim()
       : String(r['商品ターゲティング式'] || r['解決済みの商品ターゲティング式（情報提供のみ）'] || '').trim();
     if (!targetText) return;
+    const targetKey = targetType + '::' + targetText.toLowerCase();
 
-    if (targetType === 'keyword') {
-      const mt = normalizeMatchType_(String(r['マッチタイプ'] || '').trim());
-      if (mt !== 'exact') return;
+    const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
+    if (boostInfo.isBoost) {
+      boostRows.push({
+        target_key: targetKey,
+        target_type: targetType,
+        target_text: targetText,
+        boost_ad_group_name: adGroupName
+      });
+      return;
     }
 
-    const targetKey = targetType + '::' + targetText.toLowerCase();
-    if (seen[targetKey]) return;
-    seen[targetKey] = true;
+    if (isExcludedDestinationCampaignName_(campaignName)) {
+      return;
+    }
+    if (targetType === 'keyword') {
+      if (normalizeMatchType_(String(r['マッチタイプ'] || '').trim()) !== 'exact') return;
+      if (!isManualCampaignRow_(r)) return;
+    }
 
-    rows.push({
-      target_key: targetKey,
-      target_type: targetType,
-      target_text: targetText,
+    if (!normalByTargetKey[targetKey]) normalByTargetKey[targetKey] = [];
+    normalByTargetKey[targetKey].push({
       normal_campaign_id: campaignId,
       normal_campaign_name: campaignName,
-      normal_ad_group_id: String(r['広告グループID'] || '').trim(),
-      normal_ad_group_name: String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim(),
+      normal_ad_group_id: adGroupId,
+      normal_ad_group_name: adGroupName,
       default_bid: toNumber_(r['入札額'] || r['広告グループの入札額の初期値'] || ''),
       state: 'enabled'
+    });
+  });
+
+  const dedup = {};
+  const rows = [];
+  boostRows.forEach(function(b) {
+    const candidates = normalByTargetKey[b.target_key] || [];
+    let matched = candidates.filter(function(c) {
+      return String(c.normal_ad_group_name || '').trim() === String(b.boost_ad_group_name || '').trim();
+    });
+    if (!matched.length) {
+      matched = candidates.filter(function(c) {
+        return adGroupNamesRoughlyMatch_(c.normal_ad_group_name, b.boost_ad_group_name);
+      });
+    }
+    matched.forEach(function(c) {
+      const key = [b.target_key, b.boost_ad_group_name, c.normal_campaign_id, c.normal_ad_group_id].join('|');
+      if (dedup[key]) return;
+      dedup[key] = true;
+      rows.push({
+        target_key: b.target_key,
+        target_type: b.target_type,
+        target_text: b.target_text,
+        source_boost_ad_group_name: b.boost_ad_group_name,
+        normal_campaign_id: c.normal_campaign_id,
+        normal_campaign_name: c.normal_campaign_name,
+        normal_ad_group_id: c.normal_ad_group_id,
+        normal_ad_group_name: c.normal_ad_group_name,
+        default_bid: c.default_bid,
+        state: c.state
+      });
     });
   });
 
@@ -914,6 +993,32 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
 
 function looksLikeNumericId_(value) {
   return /^\d{6,}$/.test(String(value || '').trim());
+}
+
+function isExcludedDestinationCampaignName_(campaignName) {
+  const n = String(campaignName || '').toLowerCase();
+  return n.indexOf('全商品') !== -1 || n.indexOf('b2b') !== -1;
+}
+
+function isManualCampaignRow_(row) {
+  const t = String(row['ターゲティングの種類'] || '').toLowerCase();
+  if (!t) return true;
+  return t.indexOf('manual') !== -1 || t.indexOf('マニュアル') !== -1;
+}
+
+function normalizeAdGroupNameForMatch_(name) {
+  let s = String(name || '').trim().toUpperCase().replace(/\s+/g, '');
+  s = s.replace(/[-_]/g, '');
+  if (/^[A-Z0-9]+[A-Z]$/.test(s)) {
+    s = s.slice(0, -1);
+  }
+  return s;
+}
+
+function adGroupNamesRoughlyMatch_(a, b) {
+  const na = normalizeAdGroupNameForMatch_(a);
+  const nb = normalizeAdGroupNameForMatch_(b);
+  return na && nb && na === nb;
 }
 
 function buildAsinIndexFromRaw_(rawRows) {
