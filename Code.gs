@@ -131,7 +131,7 @@ function setupSheets() {
     'source_boost_ad_group_id',
     'clicks',
     'orders',
-    'acos',
+    'roas',
     'cvr'
   ]);
   ensureSheetWithHeaders_(ss, 'output_pause_boost', [
@@ -442,7 +442,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     const spend = toNumber_(r.spend);
     const cpc = toNumber_(r.cpc);
 
-    const acos = sales > 0 ? (spend / sales) * 100 : 999;
+    const roas = spend > 0 ? (sales / spend) : 0;
     const cvr = clicks > 0 ? (orders / clicks) * 100 : 0;
 
     unitMap[unitKey].impressions += impressions;
@@ -453,7 +453,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     const shouldMigrate =
       clicks >= config.min_clicks_to_migrate &&
       orders >= config.min_orders_to_migrate &&
-      acos <= config.max_acos_to_migrate &&
+      roas >= config.min_roas_to_migrate &&
       cvr >= config.min_cvr_to_migrate;
 
     if (!shouldMigrate) {
@@ -518,7 +518,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
       source_boost_ad_group_id: r.boost_ad_group_id,
       clicks: clicks,
       orders: orders,
-      acos: round2_(acos),
+      roas: round2_(roas),
       cvr: round2_(cvr)
     });
   });
@@ -563,7 +563,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
       min_impressions_to_stop: config.min_impressions_to_stop,
       min_clicks_to_migrate: config.min_clicks_to_migrate,
       min_orders_to_migrate: config.min_orders_to_migrate,
-      max_acos_to_migrate: config.max_acos_to_migrate,
+      min_roas_to_migrate: config.min_roas_to_migrate,
       min_cvr_to_migrate: config.min_cvr_to_migrate,
       bulk_sp_rows: migrations.length + pauses.length
     }
@@ -828,7 +828,10 @@ function loadConfig_(sheet) {
     min_impressions_to_stop: toNumber_(config.min_impressions_to_stop),
     min_clicks_to_migrate: toNumber_(config.min_clicks_to_migrate),
     min_orders_to_migrate: toNumber_(config.min_orders_to_migrate),
-    max_acos_to_migrate: toNumber_(config.max_acos_to_migrate),
+    min_roas_to_migrate: toNumber_(
+      config.min_roas_to_migrate ||
+      (toNumber_(config.max_acos_to_migrate) > 0 ? 100 / toNumber_(config.max_acos_to_migrate) : '')
+    ),
     min_cvr_to_migrate: toNumber_(config.min_cvr_to_migrate),
     fallback_bid: toNumber_(config.fallback_bid),
     bulk_product_type: String(config.bulk_product_type || 'Sponsored Products').trim(),
@@ -852,7 +855,7 @@ function defaultConfig_() {
     min_impressions_to_stop: 3000,
     min_clicks_to_migrate: 8,
     min_orders_to_migrate: 1,
-    max_acos_to_migrate: 35,
+    min_roas_to_migrate: 2.86,
     min_cvr_to_migrate: 8,
     fallback_bid: 45,
     bulk_product_type: 'Sponsored Products',
@@ -870,7 +873,7 @@ function writeDefaultConfig_(sheet) {
     min_impressions_to_stop: '停止対象にする最低表示回数（Boost側の停止単位合計）',
     min_clicks_to_migrate: '移行判定の最低クリック数',
     min_orders_to_migrate: '移行判定の最低注文数',
-    max_acos_to_migrate: '移行判定の最大ACOS(%)',
+    min_roas_to_migrate: '移行判定の最低ROAS',
     min_cvr_to_migrate: '移行判定の最低CVR(%)',
     fallback_bid: 'CPC・default_bid が無いときの入札額',
     bulk_product_type: '一括アップロードの Product 列 (例: Sponsored Products)',
@@ -894,7 +897,7 @@ function writeConfigPresets_(sheet) {
     min_impressions_to_stop: '停止対象にする最低表示回数（Boost側の停止単位合計）',
     min_clicks_to_migrate: '移行判定の最低クリック数',
     min_orders_to_migrate: '移行判定の最低注文数',
-    max_acos_to_migrate: '移行判定の最大ACOS(%)',
+    min_roas_to_migrate: '移行判定の最低ROAS',
     min_cvr_to_migrate: '移行判定の最低CVR(%)',
     fallback_bid: 'CPC・default_bid が無いときの入札額',
     pause_level: 'ad_group または campaign',
@@ -909,7 +912,7 @@ function writeConfigPresets_(sheet) {
         min_impressions_to_stop: 5000,
         min_clicks_to_migrate: 15,
         min_orders_to_migrate: 2,
-        max_acos_to_migrate: 30,
+        min_roas_to_migrate: 3.33,
         min_cvr_to_migrate: 10,
         fallback_bid: 40,
         pause_level: 'ad_group',
@@ -923,7 +926,7 @@ function writeConfigPresets_(sheet) {
         min_impressions_to_stop: 3000,
         min_clicks_to_migrate: 8,
         min_orders_to_migrate: 1,
-        max_acos_to_migrate: 35,
+        min_roas_to_migrate: 2.86,
         min_cvr_to_migrate: 8,
         fallback_bid: 45,
         pause_level: 'ad_group',
@@ -937,7 +940,7 @@ function writeConfigPresets_(sheet) {
         min_impressions_to_stop: 2000,
         min_clicks_to_migrate: 5,
         min_orders_to_migrate: 1,
-        max_acos_to_migrate: 45,
+        min_roas_to_migrate: 2.22,
         min_cvr_to_migrate: 5,
         fallback_bid: 50,
         pause_level: 'ad_group',
