@@ -171,6 +171,15 @@ python3 scripts/convert_sp_bulk_to_input_boost.py \
 - 出力は `input_boost` の列形式に合わせて作成
 - `product_key` が空になる行は `SKU` 等で補完
 
+## Excelのみで変換する方法（Windows向け）
+Pythonやチャットを使わない場合は、VBAマクロを使う。
+
+1. バルクXLSXをExcelで開く
+2. `Alt + F11` でVBEを開く
+3. `ファイル > ファイルのインポート` で `excel/ConvertToInputBoost.bas` を読み込む
+4. マクロ `ExportInputBoostCsv` を実行
+5. 出力されたCSVを `input_boost` にインポート
+
 大容量データ時の代替手順:
 1. バルクExcelを別スプレッドシートにインポート
 2. `config.source_spreadsheet_id` にそのスプレッドシートIDを設定
