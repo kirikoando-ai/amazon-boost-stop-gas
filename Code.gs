@@ -435,6 +435,7 @@ function runBoostStopWorkflow() {
   const boostRows = getRows_(ss.getSheetByName('input_boost'));
   const mapRows = getRows_(ss.getSheetByName('input_mapping'));
   const stopProductRows = getRows_(ss.getSheetByName('input_stop_products'));
+  const rawRows = getRows_(ss.getSheetByName('input_bulk_sp_raw'));
 
   if (!boostRows.length) {
     throw new Error('input_boost にデータがありません。');
@@ -442,7 +443,8 @@ function runBoostStopWorkflow() {
 
   const mapping = buildMapping_(mapRows);
   const approvedStopKeys = loadApprovedStopKeys_(stopProductRows);
-  const result = evaluateRows_(boostRows, mapping, config, approvedStopKeys);
+  const approvedUnitsFromRaw = buildApprovedUnitsFromRaw_(rawRows, approvedStopKeys, config.pause_level);
+  const result = evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw);
 
   writeRows_(ss.getSheetByName('output_migrate_exact'), result.migrations);
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
@@ -511,17 +513,18 @@ function exportOutputSheetsAsCsv() {
   );
 }
 
-function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
+function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw) {
   const migrations = [];
   const blockers = [];
   const unitMap = {};
   const migrationDedup = {};
   const approvedUnits = buildApprovedUnits_(boostRows, approvedStopKeys, config.pause_level);
+  const mergedApprovedUnits = mergeApprovedUnits_(approvedUnits, approvedUnitsFromRaw || {});
   let skippedRowsByStopControl = 0;
 
   boostRows.forEach(function(r) {
     const unitKey = makePauseUnitKey_(r, config.pause_level);
-    const stopControl = shouldProcessRowByStopApproval_(r, unitKey, config, approvedStopKeys, approvedUnits);
+    const stopControl = shouldProcessRowByStopApproval_(r, unitKey, config, approvedStopKeys, mergedApprovedUnits);
     if (!stopControl.allowed) {
       skippedRowsByStopControl += 1;
       if (stopControl.reason === 'missing_product_key') {
@@ -672,6 +675,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     summary: {
       boost_rows: boostRows.length,
       approved_product_keys: Object.keys(approvedStopKeys).length,
+      approved_units: Object.keys(mergedApprovedUnits).length,
       skipped_rows_by_stop_control: skippedRowsByStopControl,
       migration_rows: migrations.length,
       pause_rows: pauses.length,
@@ -690,7 +694,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
 function loadApprovedStopKeys_(rows) {
   const keys = {};
   rows.forEach(function(r) {
-    const key = String(r.product_key || '').trim();
+    const key = normalizeProductKey_(r.product_key);
     if (!key) {
       return;
     }
@@ -705,7 +709,7 @@ function shouldProcessRowByStopApproval_(row, unitKey, config, approvedStopKeys,
   if (!config.require_stop_approval) {
     return { allowed: true, reason: 'approval_not_required' };
   }
-  const key = String(row.product_key || '').trim();
+  const key = normalizeProductKey_(row.product_key);
   if (key && approvedStopKeys[key]) {
     return { allowed: true, reason: 'approved_product' };
   }
@@ -718,7 +722,7 @@ function shouldProcessRowByStopApproval_(row, unitKey, config, approvedStopKeys,
 function buildApprovedUnits_(boostRows, approvedStopKeys, pauseLevel) {
   const units = {};
   boostRows.forEach(function(r) {
-    const key = String(r.product_key || '').trim();
+    const key = normalizeProductKey_(r.product_key);
     if (!key || !approvedStopKeys[key]) {
       return;
     }
@@ -726,6 +730,43 @@ function buildApprovedUnits_(boostRows, approvedStopKeys, pauseLevel) {
     units[unitKey] = true;
   });
   return units;
+}
+
+function buildApprovedUnitsFromRaw_(rawRows, approvedStopKeys, pauseLevel) {
+  const units = {};
+  if (!rawRows || !rawRows.length) {
+    return units;
+  }
+  rawRows.forEach(function(r) {
+    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') {
+      return;
+    }
+    const asin = normalizeProductKey_(r['ASIN（情報提供のみ）']);
+    if (!asin || !approvedStopKeys[asin]) {
+      return;
+    }
+    const campaignId = String(r['キャンペーンID'] || '').trim();
+    if (!campaignId) {
+      return;
+    }
+    if (pauseLevel === 'campaign') {
+      units[campaignId + '|campaign'] = true;
+      return;
+    }
+    const adGroupId = String(r['広告グループID'] || '').trim();
+    if (!adGroupId) {
+      return;
+    }
+    units[campaignId + '|' + adGroupId] = true;
+  });
+  return units;
+}
+
+function mergeApprovedUnits_(unitsA, unitsB) {
+  const merged = {};
+  Object.keys(unitsA || {}).forEach(function(k) { merged[k] = true; });
+  Object.keys(unitsB || {}).forEach(function(k) { merged[k] = true; });
+  return merged;
 }
 
 function buildBulkSpRows_(migrations, pauses, config) {
@@ -1446,4 +1487,8 @@ function toBoolean_(value) {
 
 function round2_(num) {
   return Math.round(num * 100) / 100;
+}
+
+function normalizeProductKey_(value) {
+  return String(value || '').trim().toUpperCase();
 }
