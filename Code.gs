@@ -587,7 +587,17 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys) {
     const destination = mapping[key];
 
     if (!destination) {
-      // 移行先が無い場合は移行をスキップ（Boostアーカイブは継続）
+      blockers.push({
+        blocker_type: 'migration_required_but_mapping_missing',
+        boost_campaign_id: r.boost_campaign_id,
+        boost_campaign_name: r.boost_campaign_name,
+        boost_ad_group_id: r.boost_ad_group_id,
+        boost_ad_group_name: r.boost_ad_group_name,
+        target_type: r.target_type,
+        target_text: r.target_text,
+        reason: '好調キーワードだが移行先が見つからない',
+        required_action: 'input_mapping を確認（Manualのみ / boost除外 / 同名広告グループ）'
+      });
       return;
     }
 
@@ -859,30 +869,54 @@ function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex
 
 function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
   const boostMap = buildBoostCampaignMap_(boostCampaignRows);
+  const boostAdGroupsByProduct = {};
   const seen = {};
   const rows = [];
+  const asinIndex = buildAsinIndexFromRaw_(rawRows);
 
+  // 1) Boost側の product_key -> ad_group_name セットを構築
+  rawRows.forEach(function(r) {
+    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
+    const campaignId = String(r['キャンペーンID'] || '').trim();
+    const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
+    const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
+    if (!boostInfo.isBoost) return;
+
+    const productKey = getRowProductKeyFromRaw_(r, asinIndex, boostInfo.productKey);
+    const adGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
+    if (!productKey || !adGroupName) return;
+    if (!boostAdGroupsByProduct[productKey]) {
+      boostAdGroupsByProduct[productKey] = [];
+    }
+    boostAdGroupsByProduct[productKey].push(adGroupName);
+  });
+
+  // 2) 通常側から移行先候補を抽出（Manualのみ / boost除外 / 同名広告グループ一致）
   rawRows.forEach(function(r) {
     if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
 
     const entity = String(r['エンティティ'] || '').trim();
     const targetType = normalizeTargetTypeFromEntity_(entity);
-    if (!targetType) return;
+    if (targetType !== 'keyword') return;
 
     const campaignId = String(r['キャンペーンID'] || '').trim();
     const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
     const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
     if (boostInfo.isBoost) return;
+    if (isExcludedDestinationCampaignName_(campaignName)) return;
+    if (!isManualCampaignRow_(r)) return;
 
-    const targetText = targetType === 'keyword'
-      ? String(r['キーワードテキスト'] || '').trim()
-      : String(r['商品ターゲティング式'] || r['解決済みの商品ターゲティング式（情報提供のみ）'] || '').trim();
+    const targetText = String(r['キーワードテキスト'] || '').trim();
     if (!targetText) return;
 
-    if (targetType === 'keyword') {
-      const mt = normalizeMatchType_(String(r['マッチタイプ'] || '').trim());
-      if (mt !== 'exact') return;
-    }
+    const mt = normalizeMatchType_(String(r['マッチタイプ'] || '').trim());
+    if (mt !== 'exact') return;
+
+    const productKey = getRowProductKeyFromRaw_(r, asinIndex, '');
+    const boostAdGroupNames = boostAdGroupsByProduct[productKey] || [];
+    const normalAdGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
+    if (!productKey || !boostAdGroupNames.length || !normalAdGroupName) return;
+    if (!adGroupSetHasMatch_(boostAdGroupNames, normalAdGroupName)) return;
 
     const targetKey = targetType + '::' + targetText.toLowerCase();
     if (seen[targetKey]) return;
@@ -906,6 +940,50 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
 
 function looksLikeNumericId_(value) {
   return /^\d{6,}$/.test(String(value || '').trim());
+}
+
+function getRowProductKeyFromRaw_(r, asinIndex, fallback) {
+  const campaignId = String(r['キャンペーンID'] || '').trim();
+  const adGroupId = String(r['広告グループID'] || '').trim();
+  const asin = String(r['ASIN（情報提供のみ）'] || '').trim();
+  const adGroupAsin = asinIndex ? String(asinIndex.byAdGroup[campaignId + '|' + adGroupId] || '').trim() : '';
+  const campaignAsin = asinIndex ? String(asinIndex.byCampaign[campaignId] || '').trim() : '';
+  const sku = String(r['SKU'] || '').trim();
+  return asin || adGroupAsin || campaignAsin || String(fallback || '').trim() || sku;
+}
+
+function isExcludedDestinationCampaignName_(campaignName) {
+  const name = String(campaignName || '').toLowerCase();
+  return name.indexOf('boost') !== -1 || name.indexOf('全商品') !== -1 || name.indexOf('b2b') !== -1;
+}
+
+function isManualCampaignRow_(r) {
+  const t = String(r['ターゲティングの種類'] || '').toLowerCase();
+  if (!t) {
+    return true;
+  }
+  return t.indexOf('manual') !== -1 || t.indexOf('マニュアル') !== -1;
+}
+
+function normalizeAdGroupNameForMatch_(name) {
+  let s = String(name || '').trim().toUpperCase();
+  s = s.replace(/\s+/g, '').replace(/[-_]/g, '');
+  if (/^[A-Z0-9]+[A-Z]$/.test(s)) {
+    s = s.slice(0, -1);
+  }
+  return s;
+}
+
+function adGroupNamesRoughlyMatch_(a, b) {
+  const na = normalizeAdGroupNameForMatch_(a);
+  const nb = normalizeAdGroupNameForMatch_(b);
+  return !!na && !!nb && na === nb;
+}
+
+function adGroupSetHasMatch_(adGroupNames, targetName) {
+  return adGroupNames.some(function(name) {
+    return adGroupNamesRoughlyMatch_(name, targetName);
+  });
 }
 
 function buildAsinIndexFromRaw_(rawRows) {

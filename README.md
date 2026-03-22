@@ -237,10 +237,15 @@ Windows環境などで必要な場合のみ利用する。
 - 入力: `input_bulk_sp_raw` のみ
 - 自動作成されるシート:
   - `input_boost_campaigns`（BoostキャンペーンIDと product_key 候補）
-  - `input_mapping`（通常キャンペーンの exact キーワード / 商品ターゲティングを候補化）
+  - `input_mapping`（通常キャンペーンの exact キーワードを候補化）
   - `input_boost`（判定対象行）
 - `input_stop_products` は自動更新しない（停止ASINは手入力で指定）
 - 手入力が必要なのは `input_stop_products`（停止ASIN + `approved_to_stop=true`）（必要に応じて `input_mapping` 微修正）
+- 自動マッピングの制約:
+- 移行先は Manual キャンペーンのみ（Auto除外）
+- キャンペーン名に `boost` / `全商品` / `B2B` を含むものは除外
+- 停止対象ASINのBoostと同じ広告グループ名のみ採用（末尾英字ゆらぎは近似一致）
+- 好調キーワードで移行先不明の場合は `output_blockers` に `migration_required_but_mapping_missing` を出力
 
 ## 運用上の注意
 - 新規SKUが多い週は、`input_stop_products` の承認漏れがないかを優先確認
