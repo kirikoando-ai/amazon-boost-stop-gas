@@ -14,6 +14,7 @@ function onOpen() {
 function setupSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureSheetWithHeaders_(ss, 'config', ['key', 'value', 'note']);
+  ensureSheetWithHeaders_(ss, 'config_presets', ['preset', 'key', 'value', 'note', 'recommended_for']);
   ensureSheetWithHeaders_(ss, 'input_boost', [
     'boost_campaign_id',
     'boost_campaign_name',
@@ -191,7 +192,8 @@ function setupSheets() {
   ]);
 
   writeDefaultConfig_(ss.getSheetByName('config'));
-  SpreadsheetApp.getUi().alert('シート初期化が完了しました。config と input_*（必要時は input_stop_products）に値を入れて「判定＆出力作成」を実行してください。');
+  writeConfigPresets_(ss.getSheetByName('config_presets'));
+  SpreadsheetApp.getUi().alert('シート初期化が完了しました。config_presets で保守/標準/攻めを確認し、config に採用値を入力してから「判定＆出力作成」を実行してください。');
 }
 
 function convertRawSpBulkToInputBoost() {
@@ -877,6 +879,77 @@ function writeDefaultConfig_(sheet) {
     return [k, defaults[k], notes[k] || ''];
   });
   sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+}
+
+function writeConfigPresets_(sheet) {
+  const notes = {
+    min_impressions_to_stop: '停止対象にする最低表示回数（Boost側の停止単位合計）',
+    min_clicks_to_migrate: '移行判定の最低クリック数',
+    min_orders_to_migrate: '移行判定の最低注文数',
+    max_acos_to_migrate: '移行判定の最大ACOS(%)',
+    min_cvr_to_migrate: '移行判定の最低CVR(%)',
+    fallback_bid: 'CPC・default_bid が無いときの入札額',
+    pause_level: 'ad_group または campaign',
+    require_stop_approval: 'true なら input_stop_products 承認済みのみ処理'
+  };
+
+  const presets = [
+    {
+      preset: 'conservative',
+      recommended_for: '誤移行を最小化したい / 実績安定を優先',
+      values: {
+        min_impressions_to_stop: 5000,
+        min_clicks_to_migrate: 15,
+        min_orders_to_migrate: 2,
+        max_acos_to_migrate: 30,
+        min_cvr_to_migrate: 10,
+        fallback_bid: 40,
+        pause_level: 'ad_group',
+        require_stop_approval: true
+      }
+    },
+    {
+      preset: 'standard',
+      recommended_for: '現行の標準運用',
+      values: {
+        min_impressions_to_stop: 3000,
+        min_clicks_to_migrate: 8,
+        min_orders_to_migrate: 1,
+        max_acos_to_migrate: 35,
+        min_cvr_to_migrate: 8,
+        fallback_bid: 45,
+        pause_level: 'ad_group',
+        require_stop_approval: true
+      }
+    },
+    {
+      preset: 'aggressive',
+      recommended_for: '露出拡大を優先 / 早めに移行したい',
+      values: {
+        min_impressions_to_stop: 2000,
+        min_clicks_to_migrate: 5,
+        min_orders_to_migrate: 1,
+        max_acos_to_migrate: 45,
+        min_cvr_to_migrate: 5,
+        fallback_bid: 50,
+        pause_level: 'ad_group',
+        require_stop_approval: true
+      }
+    }
+  ];
+
+  const rows = [];
+  presets.forEach(function(preset) {
+    Object.keys(preset.values).forEach(function(key) {
+      rows.push([preset.preset, key, preset.values[key], notes[key] || '', preset.recommended_for]);
+    });
+  });
+
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, 5).setValues([['preset', 'key', 'value', 'note', 'recommended_for']]);
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+  }
 }
 
 function ensureSheetWithHeaders_(ss, name, headers) {
