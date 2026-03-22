@@ -279,12 +279,13 @@ function convertRawSpBulkToInputBoost() {
   const rawRows = getRows_(ss.getSheetByName('input_bulk_sp_raw'));
   const boostCampaignRows = getRows_(ss.getSheetByName('input_boost_campaigns'));
   const boostCampaignMap = buildBoostCampaignMap_(boostCampaignRows);
+  const asinIndex = buildAsinIndexFromRaw_(rawRows);
 
   if (!rawRows.length) {
     throw new Error('input_bulk_sp_raw にデータがありません。SPバルクの2枚目シートを貼り付けてください。');
   }
 
-  const converted = convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config);
+  const converted = convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config, asinIndex);
 
   const inputBoostSheet = ss.getSheetByName('input_boost');
   writeRows_(inputBoostSheet, converted);
@@ -308,14 +309,15 @@ function autoBuildInputsFromRaw() {
 
   const existingBoostCampaignRows = getRows_(ss.getSheetByName('input_boost_campaigns'));
 
-  const autoBoostCampaignRows = buildBoostCampaignRowsFromRaw_(rawRows, config, existingBoostCampaignRows);
+  const asinIndex = buildAsinIndexFromRaw_(rawRows);
+  const autoBoostCampaignRows = buildBoostCampaignRowsFromRaw_(rawRows, config, existingBoostCampaignRows, asinIndex);
   writeRows_(ss.getSheetByName('input_boost_campaigns'), autoBoostCampaignRows);
 
   const autoMappingRows = buildMappingRowsFromRaw_(rawRows, config, autoBoostCampaignRows);
   writeRows_(ss.getSheetByName('input_mapping'), autoMappingRows);
 
   const boostCampaignMap = buildBoostCampaignMap_(autoBoostCampaignRows);
-  const convertedBoost = convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config);
+  const convertedBoost = convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config, asinIndex);
   writeRows_(ss.getSheetByName('input_boost'), convertedBoost);
 
   SpreadsheetApp.getUi().alert(
@@ -351,7 +353,8 @@ function convertExternalSpBulkToInputBoost() {
     throw new Error('外部シートにデータがありません。');
   }
 
-  const converted = convertSpRowsToInputBoost_(sourceRows, boostCampaignMap, config);
+  const asinIndex = buildAsinIndexFromRaw_(sourceRows);
+  const converted = convertSpRowsToInputBoost_(sourceRows, boostCampaignMap, config, asinIndex);
 
   writeRows_(ss.getSheetByName('input_boost'), converted);
 
@@ -364,7 +367,7 @@ function convertExternalSpBulkToInputBoost() {
   );
 }
 
-function convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config) {
+function convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config, asinIndex) {
   const converted = [];
 
   rawRows.forEach(function(r) {
@@ -394,7 +397,10 @@ function convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config) {
 
     const asin = String(r['ASIN（情報提供のみ）'] || '').trim();
     const sku = String(r['SKU'] || '').trim();
-    const productKey = asin || boostInfo.productKey || sku;
+    const adGroupId = String(r['広告グループID'] || '').trim();
+    const adGroupAsin = asinIndex ? String(asinIndex.byAdGroup[campaignId + '|' + adGroupId] || '').trim() : '';
+    const campaignAsin = asinIndex ? String(asinIndex.byCampaign[campaignId] || '').trim() : '';
+    const productKey = asin || boostInfo.productKey || adGroupAsin || campaignAsin || sku;
 
     converted.push({
       boost_campaign_id: campaignId,
@@ -800,7 +806,7 @@ function buildMapping_(rows) {
   return map;
 }
 
-function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows) {
+function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex) {
   const byId = {};
 
   existingRows.forEach(function(r) {
@@ -833,7 +839,8 @@ function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows) {
 
     const asin = String(r['ASIN（情報提供のみ）'] || '').trim();
     const sku = String(r['SKU'] || '').trim();
-    const productKey = asin || sku;
+    const campaignAsin = asinIndex ? String(asinIndex.byCampaign[campaignId] || '').trim() : '';
+    const productKey = asin || campaignAsin || sku;
     const productLabel = String(r['SKU'] || '').trim();
     if (!byId[campaignId]) {
       byId[campaignId] = {
@@ -907,6 +914,34 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
 
 function looksLikeNumericId_(value) {
   return /^\d{6,}$/.test(String(value || '').trim());
+}
+
+function buildAsinIndexFromRaw_(rawRows) {
+  const byCampaign = {};
+  const byAdGroup = {};
+
+  rawRows.forEach(function(r) {
+    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') {
+      return;
+    }
+    const asin = String(r['ASIN（情報提供のみ）'] || '').trim();
+    if (!asin) {
+      return;
+    }
+    const campaignId = String(r['キャンペーンID'] || '').trim();
+    const adGroupId = String(r['広告グループID'] || '').trim();
+    if (campaignId && !byCampaign[campaignId]) {
+      byCampaign[campaignId] = asin;
+    }
+    if (campaignId && adGroupId) {
+      const key = campaignId + '|' + adGroupId;
+      if (!byAdGroup[key]) {
+        byAdGroup[key] = asin;
+      }
+    }
+  });
+
+  return { byCampaign: byCampaign, byAdGroup: byAdGroup };
 }
 
 function buildBoostCampaignMap_(rows) {
