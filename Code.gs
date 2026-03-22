@@ -621,7 +621,8 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUni
     }
     migrationDedup[dedupKey] = true;
 
-    const bid = destination.default_bid ? toNumber_(destination.default_bid) : (cpc > 0 ? cpc : config.fallback_bid);
+    const defaultBid = toNumber_(destination.default_bid);
+    const bid = defaultBid > 0 ? defaultBid : (cpc > 0 ? cpc : config.fallback_bid);
 
     migrations.push({
       action: 'add_to_normal',
@@ -1476,7 +1477,15 @@ function toNumber_(value) {
   if (value == null || value === '') {
     return 0;
   }
-  const n = Number(String(value).replace(/,/g, '').trim());
+  // "¥45", "45円", "1,234.56" などを数値化
+  const normalized = String(value)
+    .replace(/[,\s]/g, '')
+    .replace(/[^\d.\-]/g, '')
+    .trim();
+  if (normalized === '' || normalized === '.' || normalized === '-' || normalized === '-.') {
+    return 0;
+  }
+  const n = Number(normalized);
   return isNaN(n) ? 0 : n;
 }
 
