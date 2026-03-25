@@ -1867,11 +1867,15 @@ function sheetToCsv_(sheet) {
 
 function exportSheetAsExcel_(sourceSheet, fileName, parentFolder) {
   const values = sourceSheet.getDataRange().getValues();
+  if (!values.length || !values[0].length) {
+    throw new Error('export対象シートにデータがありません。');
+  }
   const tempSs = SpreadsheetApp.create('temp_output_bulk_sp_export');
   const tempSheet = tempSs.getSheets()[0];
   tempSheet.setName(sourceSheet.getName());
   tempSheet.clear();
   tempSheet.getRange(1, 1, values.length, values[0].length).setValues(values);
+  SpreadsheetApp.flush();
 
   const exportUrl = 'https://docs.google.com/spreadsheets/d/' + tempSs.getId() + '/export?format=xlsx';
   const token = ScriptApp.getOAuthToken();
