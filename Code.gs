@@ -492,8 +492,8 @@ function runBoostStopWorkflow() {
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
   ensureSheetWithHeaders_(ss, 'output_blockers', outputBlockerHeaders_());
   const blockerSheet = ss.getSheetByName('output_blockers');
-  blockerSheet.clearDataValidations();
-  blockerSheet.clearNote();
+  blockerSheet.getDataRange().clearDataValidations();
+  blockerSheet.getDataRange().clearNote();
   writeRows_(blockerSheet, result.blockers);
   applyBlockerSelectionDropdowns_(blockerSheet);
   writeSummary_(ss.getSheetByName('output_summary'), result.summary);
