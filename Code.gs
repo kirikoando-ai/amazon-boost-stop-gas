@@ -11,6 +11,7 @@ function onOpen() {
     .addSeparator()
     .addItem('1) 判定＆出力作成', 'runBoostStopWorkflow')
     .addItem('1.5) Amazon SP一括行を再生成', 'buildBulkSpSheet')
+    .addItem('1.6) アップロード用CSVを作成（output_bulk_spのみ）', 'exportBulkSpOnlyAsCsv')
     .addItem('2) 出力シートをCSV化（Drive保存）', 'exportOutputSheetsAsCsv')
     .addToUi();
 }
@@ -523,9 +524,7 @@ function exportOutputSheetsAsCsv() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const targets = ['output_migrate_exact', 'output_pause_boost', 'output_blockers', 'output_summary', 'output_bulk_sp'];
   const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss');
-  const parent = DriveApp.getFileById(ss.getId()).getParents().hasNext()
-    ? DriveApp.getFileById(ss.getId()).getParents().next()
-    : DriveApp.getRootFolder();
+  const parent = getSpreadsheetParentFolder_(ss);
 
   const created = [];
   targets.forEach(function(name) {
@@ -533,21 +532,10 @@ function exportOutputSheetsAsCsv() {
     if (!sheet) {
       return;
     }
-    const values = sheet.getDataRange().getDisplayValues();
-    if (!values.length) {
+    const csv = sheetToCsv_(sheet);
+    if (!csv) {
       return;
     }
-    const csv = values
-      .map(function(row) {
-        return row
-          .map(function(cell) {
-            const safe = String(cell == null ? '' : cell).replace(/"/g, '""');
-            return '"' + safe + '"';
-          })
-          .join(',');
-      })
-      .join('\n');
-
     const file = parent.createFile(name + '_' + timestamp + '.csv', csv, MimeType.CSV);
     created.push(file.getName());
   });
@@ -557,6 +545,25 @@ function exportOutputSheetsAsCsv() {
       ? 'CSVを作成しました:\n' + created.join('\n')
       : '出力対象シートにデータがありません。'
   );
+}
+
+function exportBulkSpOnlyAsCsv() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('output_bulk_sp');
+  if (!sheet) {
+    throw new Error('output_bulk_sp シートがありません。');
+  }
+
+  const csv = sheetToCsv_(sheet);
+  if (!csv) {
+    throw new Error('output_bulk_sp にデータがありません。先に 1) 判定＆出力作成 または 1.5) Amazon SP一括行を再生成 を実行してください。');
+  }
+
+  const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss');
+  const parent = getSpreadsheetParentFolder_(ss);
+  const file = parent.createFile('output_bulk_sp_' + timestamp + '.csv', csv, MimeType.CSV);
+
+  SpreadsheetApp.getUi().alert('アップロード用CSVを作成しました:\n' + file.getName());
 }
 
 function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex) {
@@ -1833,6 +1840,29 @@ function resetSheetWithHeaders_(ss, name, headers) {
   fullRange.clearFormat();
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   return sheet;
+}
+
+function getSpreadsheetParentFolder_(ss) {
+  return DriveApp.getFileById(ss.getId()).getParents().hasNext()
+    ? DriveApp.getFileById(ss.getId()).getParents().next()
+    : DriveApp.getRootFolder();
+}
+
+function sheetToCsv_(sheet) {
+  const values = sheet.getDataRange().getDisplayValues();
+  if (!values.length) {
+    return '';
+  }
+  return values
+    .map(function(row) {
+      return row
+        .map(function(cell) {
+          const safe = String(cell == null ? '' : cell).replace(/"/g, '""');
+          return '"' + safe + '"';
+        })
+        .join(',');
+    })
+    .join('\n');
 }
 
 function upsertConfigRows_(sheet, valuesObj, notesObj) {
