@@ -161,7 +161,10 @@ function setupSheets() {
     'target_type',
     'target_text',
     'reason',
-    'required_action'
+    'required_action',
+    'candidate_count',
+    'candidate_campaign_names',
+    'candidate_ad_group_names'
   ]);
   ensureSheetWithHeaders_(ss, 'output_summary', ['metric', 'value']);
   ensureSheetWithHeaders_(ss, 'output_bulk_sp', [
@@ -486,6 +489,7 @@ function runBoostStopWorkflow() {
   const mapRows = getRows_(ss.getSheetByName('input_mapping'));
   const stopProductRows = getRows_(ss.getSheetByName('input_stop_products'));
   const rawRows = getRows_(ss.getSheetByName('input_bulk_sp_raw'));
+  const boostCampaignRows = getRows_(ss.getSheetByName('input_boost_campaigns'));
 
   if (!boostRows.length) {
     throw new Error('input_boost にデータがありません。');
@@ -494,10 +498,16 @@ function runBoostStopWorkflow() {
   const mapping = buildMapping_(mapRows);
   const approvedStopKeys = loadApprovedStopKeys_(stopProductRows);
   const approvedUnitsFromRaw = buildApprovedUnitsFromRaw_(rawRows, approvedStopKeys, config.pause_level);
-  const result = evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw);
+  const candidateIndex = buildManualDestinationCandidateIndex_(rawRows, config, boostCampaignRows);
+  const result = evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex);
 
   writeRows_(ss.getSheetByName('output_migrate_exact'), result.migrations);
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
+  ensureSheetHasColumns_(ss.getSheetByName('output_blockers'), [
+    'candidate_count',
+    'candidate_campaign_names',
+    'candidate_ad_group_names'
+  ]);
   writeRows_(ss.getSheetByName('output_blockers'), result.blockers);
   writeSummary_(ss.getSheetByName('output_summary'), result.summary);
   writeRows_(ss.getSheetByName('output_bulk_sp'), buildBulkSpRows_(result.migrations, result.pauses, config));
@@ -563,7 +573,7 @@ function exportOutputSheetsAsCsv() {
   );
 }
 
-function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw) {
+function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex) {
   const migrations = [];
   const blockers = [];
   const unitMap = {};
@@ -644,6 +654,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUni
     const destination = resolveMappingDestination_(mapping, key, r);
 
     if (!destination) {
+      const candidates = suggestManualDestinations_(candidateIndex, r);
       blockers.push({
         blocker_type: 'migration_required_but_mapping_missing',
         boost_campaign_id: r.boost_campaign_id,
@@ -653,7 +664,12 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUni
         target_type: r.target_type,
         target_text: r.target_text,
         reason: '好調キーワードだが移行先が見つからない',
-        required_action: 'input_mapping を確認（Manualのみ / boost除外 / 同名広告グループ）'
+        required_action: candidates.length
+          ? '候補Campaign/AdGroupを確認して input_mapping を追加'
+          : 'input_mapping を確認（Manualのみ / boost除外 / 同名広告グループ）',
+        candidate_count: candidates.length,
+        candidate_campaign_names: candidates.map(function(c) { return c.normal_campaign_name; }).join(' | '),
+        candidate_ad_group_names: candidates.map(function(c) { return c.normal_ad_group_name; }).join(' | ')
       });
       return;
     }
@@ -1070,6 +1086,77 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
   });
 
   return rows;
+}
+
+function buildManualDestinationCandidateIndex_(rawRows, config, boostCampaignRows) {
+  const boostMap = buildBoostCampaignMap_(boostCampaignRows || []);
+  const asinIndex = buildAsinIndexFromRaw_(rawRows);
+  const byGroupProduct = {};
+  const byAdGroup = {};
+
+  rawRows.forEach(function(r) {
+    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
+    const campaignId = String(r['キャンペーンID'] || '').trim();
+    const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
+    const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
+    if (boostInfo.isBoost) return;
+    if (isExcludedDestinationCampaignName_(campaignName)) return;
+    if (!isManualCampaignRow_(r)) return;
+
+    const adGroupId = String(r['広告グループID'] || '').trim();
+    const adGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
+    const productKey = getRowProductKeyFromRaw_(r, asinIndex, boostInfo.productKey);
+    if (!campaignId || !adGroupId || !adGroupName) return;
+
+    const candidate = {
+      product_key: String(productKey || '').trim(),
+      normal_campaign_id: campaignId,
+      normal_campaign_name: campaignName,
+      normal_ad_group_id: adGroupId,
+      normal_ad_group_name: adGroupName
+    };
+
+    addCandidate_(byAdGroup, normalizeAdGroupNameForMatch_(adGroupName), candidate);
+    if (candidate.product_key) {
+      addCandidate_(byGroupProduct, candidate.product_key + '|' + normalizeAdGroupNameForMatch_(adGroupName), candidate);
+    }
+  });
+
+  return {
+    byGroupProduct: byGroupProduct,
+    byAdGroup: byAdGroup
+  };
+}
+
+function addCandidate_(bucket, key, candidate) {
+  if (!key) return;
+  if (!bucket[key]) {
+    bucket[key] = [];
+  }
+  const dedupKey = [
+    candidate.normal_campaign_id,
+    candidate.normal_ad_group_id
+  ].join('|');
+  const exists = bucket[key].some(function(item) {
+    return [item.normal_campaign_id, item.normal_ad_group_id].join('|') === dedupKey;
+  });
+  if (!exists) {
+    bucket[key].push(candidate);
+  }
+}
+
+function suggestManualDestinations_(candidateIndex, boostRow) {
+  if (!candidateIndex) {
+    return [];
+  }
+  const groupNorm = normalizeAdGroupNameForMatch_(String(boostRow.boost_ad_group_name || '').trim());
+  const exactKey = String(boostRow.product_key || '').trim() + '|' + groupNorm;
+  const exact = candidateIndex.byGroupProduct[exactKey] || [];
+  if (exact.length) {
+    return exact.slice(0, 3);
+  }
+  const byGroup = candidateIndex.byAdGroup[groupNorm] || [];
+  return byGroup.slice(0, 3);
 }
 
 function looksLikeNumericId_(value) {
