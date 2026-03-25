@@ -11,7 +11,7 @@ function onOpen() {
     .addSeparator()
     .addItem('1) 判定＆出力作成', 'runBoostStopWorkflow')
     .addItem('1.5) Amazon SP一括行を再生成', 'buildBulkSpSheet')
-    .addItem('1.6) アップロード用CSVを作成（output_bulk_spのみ）', 'exportBulkSpOnlyAsCsv')
+    .addItem('1.6) アップロード用Excelを作成（output_bulk_spのみ）', 'exportBulkSpOnlyAsExcel')
     .addItem('2) 出力シートをCSV化（Drive保存）', 'exportOutputSheetsAsCsv')
     .addToUi();
 }
@@ -547,23 +547,23 @@ function exportOutputSheetsAsCsv() {
   );
 }
 
-function exportBulkSpOnlyAsCsv() {
+function exportBulkSpOnlyAsExcel() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('output_bulk_sp');
   if (!sheet) {
     throw new Error('output_bulk_sp シートがありません。');
   }
 
-  const csv = sheetToCsv_(sheet);
-  if (!csv) {
+  const values = sheet.getDataRange().getValues();
+  if (!values.length) {
     throw new Error('output_bulk_sp にデータがありません。先に 1) 判定＆出力作成 または 1.5) Amazon SP一括行を再生成 を実行してください。');
   }
 
   const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss');
   const parent = getSpreadsheetParentFolder_(ss);
-  const file = parent.createFile('output_bulk_sp_' + timestamp + '.csv', csv, MimeType.CSV);
+  const file = exportSheetAsExcel_(sheet, 'output_bulk_sp_' + timestamp + '.xlsx', parent);
 
-  SpreadsheetApp.getUi().alert('アップロード用CSVを作成しました:\n' + file.getName());
+  SpreadsheetApp.getUi().alert('アップロード用Excelを作成しました:\n' + file.getName());
 }
 
 function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex) {
@@ -1863,6 +1863,34 @@ function sheetToCsv_(sheet) {
         .join(',');
     })
     .join('\n');
+}
+
+function exportSheetAsExcel_(sourceSheet, fileName, parentFolder) {
+  const values = sourceSheet.getDataRange().getValues();
+  const tempSs = SpreadsheetApp.create('temp_output_bulk_sp_export');
+  const tempSheet = tempSs.getSheets()[0];
+  tempSheet.setName(sourceSheet.getName());
+  tempSheet.clear();
+  tempSheet.getRange(1, 1, values.length, values[0].length).setValues(values);
+
+  const exportUrl = 'https://docs.google.com/spreadsheets/d/' + tempSs.getId() + '/export?format=xlsx';
+  const token = ScriptApp.getOAuthToken();
+  const response = UrlFetchApp.fetch(exportUrl, {
+    headers: {
+      Authorization: 'Bearer ' + token
+    },
+    muteHttpExceptions: true
+  });
+
+  if (response.getResponseCode() !== 200) {
+    DriveApp.getFileById(tempSs.getId()).setTrashed(true);
+    throw new Error('Excel出力に失敗しました。HTTP ' + response.getResponseCode());
+  }
+
+  const blob = response.getBlob().setName(fileName);
+  const file = parentFolder.createFile(blob);
+  DriveApp.getFileById(tempSs.getId()).setTrashed(true);
+  return file;
 }
 
 function upsertConfigRows_(sheet, valuesObj, notesObj) {
