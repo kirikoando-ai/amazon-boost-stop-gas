@@ -490,10 +490,7 @@ function runBoostStopWorkflow() {
 
   writeRows_(ss.getSheetByName('output_migrate_exact'), result.migrations);
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
-  ensureSheetWithHeaders_(ss, 'output_blockers', outputBlockerHeaders_());
-  const blockerSheet = ss.getSheetByName('output_blockers');
-  blockerSheet.getDataRange().clearDataValidations();
-  blockerSheet.getDataRange().clearNote();
+  const blockerSheet = resetSheetWithHeaders_(ss, 'output_blockers', outputBlockerHeaders_());
   writeRows_(blockerSheet, result.blockers);
   applyBlockerSelectionDropdowns_(blockerSheet);
   writeSummary_(ss.getSheetByName('output_summary'), result.summary);
@@ -1788,6 +1785,16 @@ function ensureSheetWithHeaders_(ss, name, headers) {
     sheet.clear();
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
+}
+
+function resetSheetWithHeaders_(ss, name, headers) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+  sheet.clear();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  return sheet;
 }
 
 function upsertConfigRows_(sheet, valuesObj, notesObj) {
