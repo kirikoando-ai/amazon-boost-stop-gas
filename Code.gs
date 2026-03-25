@@ -152,44 +152,7 @@ function setupSheets() {
     'reason',
     'unit_impressions'
   ]);
-  ensureSheetWithHeaders_(ss, 'output_blockers', [
-    'blocker_type',
-    'boost_campaign_id',
-    'boost_campaign_name',
-    'boost_ad_group_id',
-    'boost_ad_group_name',
-    'target_type',
-    'target_text',
-    'clicks',
-    'orders',
-    'roas',
-    'cvr',
-    'cpc',
-    'reason',
-    'required_action',
-    'selected_candidate',
-    'candidate_count',
-    'candidate_campaign_names',
-    'candidate_ad_group_names',
-    'candidate_1_label',
-    'candidate_1_campaign_id',
-    'candidate_1_campaign_name',
-    'candidate_1_ad_group_id',
-    'candidate_1_ad_group_name',
-    'candidate_1_default_bid',
-    'candidate_2_label',
-    'candidate_2_campaign_id',
-    'candidate_2_campaign_name',
-    'candidate_2_ad_group_id',
-    'candidate_2_ad_group_name',
-    'candidate_2_default_bid',
-    'candidate_3_label',
-    'candidate_3_campaign_id',
-    'candidate_3_campaign_name',
-    'candidate_3_ad_group_id',
-    'candidate_3_ad_group_name',
-    'candidate_3_default_bid'
-  ]);
+  ensureSheetWithHeaders_(ss, 'output_blockers', outputBlockerHeaders_());
   ensureSheetWithHeaders_(ss, 'output_summary', ['metric', 'value']);
   ensureSheetWithHeaders_(ss, 'output_bulk_sp', [
     'プロダクト',
@@ -527,35 +490,7 @@ function runBoostStopWorkflow() {
 
   writeRows_(ss.getSheetByName('output_migrate_exact'), result.migrations);
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
-  ensureSheetHasColumns_(ss.getSheetByName('output_blockers'), [
-    'clicks',
-    'orders',
-    'roas',
-    'cvr',
-    'cpc',
-    'selected_candidate',
-    'candidate_count',
-    'candidate_campaign_names',
-    'candidate_ad_group_names',
-    'candidate_1_label',
-    'candidate_1_campaign_id',
-    'candidate_1_campaign_name',
-    'candidate_1_ad_group_id',
-    'candidate_1_ad_group_name',
-    'candidate_1_default_bid',
-    'candidate_2_label',
-    'candidate_2_campaign_id',
-    'candidate_2_campaign_name',
-    'candidate_2_ad_group_id',
-    'candidate_2_ad_group_name',
-    'candidate_2_default_bid',
-    'candidate_3_label',
-    'candidate_3_campaign_id',
-    'candidate_3_campaign_name',
-    'candidate_3_ad_group_id',
-    'candidate_3_ad_group_name',
-    'candidate_3_default_bid'
-  ]);
+  ensureSheetWithHeaders_(ss, 'output_blockers', outputBlockerHeaders_());
   const blockerSheet = ss.getSheetByName('output_blockers');
   writeRows_(blockerSheet, result.blockers);
   applyBlockerSelectionDropdowns_(blockerSheet);
@@ -1054,7 +989,50 @@ function applyBlockerSelectionDropdowns_(sheet) {
       .setAllowInvalid(false)
       .build();
     cell.setDataValidation(rule);
+    cell.setBackground('#fff2cc');
+    cell.setNote('候補を選ぶと、1.5) Amazon SP一括行を再生成 で output_bulk_sp に追加されます。');
   }
+}
+
+function outputBlockerHeaders_() {
+  return [
+    'blocker_type',
+    'boost_campaign_id',
+    'boost_campaign_name',
+    'boost_ad_group_id',
+    'boost_ad_group_name',
+    'target_type',
+    'target_text',
+    'clicks',
+    'orders',
+    'roas',
+    'cvr',
+    'cpc',
+    'reason',
+    'required_action',
+    'selected_candidate',
+    'candidate_count',
+    'candidate_campaign_names',
+    'candidate_ad_group_names',
+    'candidate_1_label',
+    'candidate_1_campaign_id',
+    'candidate_1_campaign_name',
+    'candidate_1_ad_group_id',
+    'candidate_1_ad_group_name',
+    'candidate_1_default_bid',
+    'candidate_2_label',
+    'candidate_2_campaign_id',
+    'candidate_2_campaign_name',
+    'candidate_2_ad_group_id',
+    'candidate_2_ad_group_name',
+    'candidate_2_default_bid',
+    'candidate_3_label',
+    'candidate_3_campaign_id',
+    'candidate_3_campaign_name',
+    'candidate_3_ad_group_id',
+    'candidate_3_ad_group_name',
+    'candidate_3_default_bid'
+  ];
 }
 
 function blankSpBulkRow_() {
@@ -1208,6 +1186,7 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
     const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
     if (boostInfo.isBoost) return;
     if (isExcludedDestinationCampaignName_(campaignName)) return;
+    if (isAutoCampaignName_(campaignName)) return;
     if (!isManualCampaignRow_(r)) return;
 
     const productKey = getRowProductKeyFromRaw_(r, asinIndex, boostInfo.productKey);
@@ -1285,6 +1264,7 @@ function buildManualDestinationCandidateIndex_(rawRows, config, boostCampaignRow
     const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
     if (boostInfo.isBoost) return;
     if (isExcludedDestinationCampaignName_(campaignName)) return;
+    if (isAutoCampaignName_(campaignName)) return;
     if (!isManualCampaignRow_(r)) return;
 
     const adGroupId = String(r['広告グループID'] || '').trim();
