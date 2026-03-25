@@ -1792,7 +1792,11 @@ function resetSheetWithHeaders_(ss, name, headers) {
   if (!sheet) {
     sheet = ss.insertSheet(name);
   }
-  sheet.clear();
+  const fullRange = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
+  fullRange.clearContent();
+  fullRange.clearDataValidations();
+  fullRange.clearNote();
+  fullRange.clearFormat();
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   return sheet;
 }
