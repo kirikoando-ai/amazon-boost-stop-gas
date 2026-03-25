@@ -485,9 +485,10 @@ function runBoostStopWorkflow() {
 
   const mapping = buildMapping_(mapRows);
   const approvedStopKeys = loadApprovedStopKeys_(stopProductRows);
-  const approvedUnitsFromRaw = buildApprovedUnitsFromRaw_(rawRows, approvedStopKeys, config.pause_level);
+  const archiveLevel = getArchivePauseLevel_();
+  const approvedUnitsFromRaw = buildApprovedUnitsFromRaw_(rawRows, approvedStopKeys, archiveLevel);
   const candidateIndex = buildManualDestinationCandidateIndex_(rawRows, config, boostCampaignRows);
-  const result = evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex);
+  const result = evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex, archiveLevel);
 
   writeRows_(ss.getSheetByName('output_migrate_exact'), result.migrations);
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
@@ -566,17 +567,17 @@ function exportBulkSpOnlyAsExcel() {
   SpreadsheetApp.getUi().alert('アップロード用Excelを作成しました:\n' + file.getName());
 }
 
-function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex) {
+function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUnitsFromRaw, candidateIndex, archiveLevel) {
   const migrations = [];
   const blockers = [];
   const unitMap = {};
   const migrationDedup = {};
-  const approvedUnits = buildApprovedUnits_(boostRows, approvedStopKeys, config.pause_level);
+  const approvedUnits = buildApprovedUnits_(boostRows, approvedStopKeys, archiveLevel);
   const mergedApprovedUnits = mergeApprovedUnits_(approvedUnits, approvedUnitsFromRaw || {});
   let skippedRowsByStopControl = 0;
 
   boostRows.forEach(function(r) {
-    const unitKey = makePauseUnitKey_(r, config.pause_level);
+    const unitKey = makePauseUnitKey_(r, archiveLevel);
     const stopControl = shouldProcessRowByStopApproval_(r, unitKey, config, approvedStopKeys, mergedApprovedUnits);
     if (!stopControl.allowed) {
       skippedRowsByStopControl += 1;
@@ -723,15 +724,15 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUni
 
     pauses.push({
       action: 'archive_boost',
-      entity: config.pause_level === 'campaign' ? 'Campaign' : 'AdGroup',
+      entity: 'Campaign',
       operation: 'update',
       state: 'archived',
       boost_campaign_id: unit.row.boost_campaign_id,
       boost_campaign_name: unit.row.boost_campaign_name,
       boost_ad_group_id: unit.row.boost_ad_group_id,
       boost_ad_group_name: unit.row.boost_ad_group_name,
-      pause_level: config.pause_level,
-      reason: '露出確認済みのためBoostをアーカイブ',
+      pause_level: archiveLevel,
+      reason: '停止対象のためBoost Campaignをアーカイブ',
       unit_impressions: round2_(unit.impressions)
     });
   });
@@ -748,7 +749,7 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUni
       migration_rows: migrations.length,
       pause_rows: pauses.length,
       blocker_rows: blockers.length,
-      pause_level: config.pause_level,
+      pause_level: archiveLevel,
       min_impressions_to_stop: config.min_impressions_to_stop,
       min_clicks_to_migrate: config.min_clicks_to_migrate,
       min_orders_to_migrate: config.min_orders_to_migrate,
@@ -860,12 +861,12 @@ function buildBulkSpRows_(migrations, pauses, config) {
   pauses.forEach(function(p) {
     const row = blankSpBulkRow_();
     row['プロダクト'] = config.bulk_product_type;
-    row['エンティティ'] = p.pause_level === 'campaign' ? 'Campaign' : 'Ad Group';
+    row['エンティティ'] = 'Campaign';
     row['操作'] = 'Update';
     row['キャンペーンID'] = p.boost_campaign_id;
-    row['広告グループID'] = p.pause_level === 'campaign' ? '' : p.boost_ad_group_id;
+    row['広告グループID'] = '';
     row['キャンペーン名'] = p.boost_campaign_name;
-    row['広告グループ名'] = p.pause_level === 'campaign' ? '' : p.boost_ad_group_name;
+    row['広告グループ名'] = '';
     row['ステータス'] = normalizeBulkState_(p.state || 'archived');
     rows.push(row);
   });
@@ -1603,6 +1604,10 @@ function makePauseUnitKey_(row, pauseLevel) {
     return String(row.boost_campaign_id || '') + '|campaign';
   }
   return String(row.boost_campaign_id || '') + '|' + String(row.boost_ad_group_id || '');
+}
+
+function getArchivePauseLevel_() {
+  return 'campaign';
 }
 
 function loadConfig_(sheet) {
