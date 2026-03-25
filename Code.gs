@@ -1091,6 +1091,7 @@ function normalizeBulkState_(state) {
 function buildMapping_(rows) {
   const byTarget = {};
   const byGroupProduct = {};
+  const byAdGroup = {};
   rows.forEach(function(r) {
     if (!isAllowedMappingDestination_(r)) {
       return;
@@ -1105,6 +1106,13 @@ function buildMapping_(rows) {
 
     const sourceProduct = String(r.source_product_key || '').trim();
     const sourceAdGroup = String(r.source_boost_ad_group_name || '').trim();
+    if (sourceAdGroup) {
+      const adGroupKey = normalizeAdGroupNameForMatch_(sourceAdGroup);
+      if (!byAdGroup[adGroupKey]) {
+        byAdGroup[adGroupKey] = [];
+      }
+      byAdGroup[adGroupKey].push(r);
+    }
     if (sourceProduct && sourceAdGroup) {
       const groupKey = sourceProduct + '|' + normalizeAdGroupNameForMatch_(sourceAdGroup);
       if (!byGroupProduct[groupKey]) {
@@ -1113,7 +1121,7 @@ function buildMapping_(rows) {
       byGroupProduct[groupKey].push(r);
     }
   });
-  return { byTarget: byTarget, byGroupProduct: byGroupProduct };
+  return { byTarget: byTarget, byGroupProduct: byGroupProduct, byAdGroup: byAdGroup };
 }
 
 function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex) {
@@ -1178,6 +1186,7 @@ function buildBoostCampaignRowsFromRaw_(rawRows, config, existingRows, asinIndex
 function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
   const boostMap = buildBoostCampaignMap_(boostCampaignRows);
   const normalDestByGroupProduct = {};
+  const normalDestByAdGroup = {};
   const seen = {};
   const rows = [];
   const asinIndex = buildAsinIndexFromRaw_(rawRows);
@@ -1197,15 +1206,26 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
     const normalAdGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
     if (!productKey || !normalAdGroupName) return;
     const gk = productKey + '|' + normalizeAdGroupNameForMatch_(normalAdGroupName);
+    const agk = normalizeAdGroupNameForMatch_(normalAdGroupName);
+    const candidate = {
+      normal_campaign_id: campaignId,
+      normal_campaign_name: campaignName,
+      normal_ad_group_id: String(r['広告グループID'] || '').trim(),
+      normal_ad_group_name: normalAdGroupName,
+      default_bid: toNumber_(r['入札額'] || r['広告グループの入札額の初期値'] || ''),
+      state: 'enabled'
+    };
     if (!normalDestByGroupProduct[gk]) {
-      normalDestByGroupProduct[gk] = {
-        normal_campaign_id: campaignId,
-        normal_campaign_name: campaignName,
-        normal_ad_group_id: String(r['広告グループID'] || '').trim(),
-        normal_ad_group_name: normalAdGroupName,
-        default_bid: toNumber_(r['入札額'] || r['広告グループの入札額の初期値'] || ''),
-        state: 'enabled'
-      };
+      normalDestByGroupProduct[gk] = candidate;
+    }
+    if (!normalDestByAdGroup[agk]) {
+      normalDestByAdGroup[agk] = [];
+    }
+    if (!normalDestByAdGroup[agk].some(function(item) {
+      return item.normal_campaign_id === candidate.normal_campaign_id &&
+        item.normal_ad_group_id === candidate.normal_ad_group_id;
+    })) {
+      normalDestByAdGroup[agk].push(candidate);
     }
   });
 
@@ -1229,7 +1249,9 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
     const boostAdGroupName = String(r['広告グループ名'] || r['広告グループ名（情報提供のみ）'] || '').trim();
     if (!productKey || !boostAdGroupName) return;
     const gk = productKey + '|' + normalizeAdGroupNameForMatch_(boostAdGroupName);
-    const dest = normalDestByGroupProduct[gk];
+    const agk = normalizeAdGroupNameForMatch_(boostAdGroupName);
+    const byGroupOnly = normalDestByAdGroup[agk] || [];
+    const dest = normalDestByGroupProduct[gk] || (byGroupOnly.length === 1 ? byGroupOnly[0] : null);
     if (!dest) return;
 
     const targetKey = targetType + '::' + targetText.toLowerCase();
@@ -1396,6 +1418,12 @@ function resolveMappingDestination_(mapping, targetKey, boostRow) {
     return byGroup[0];
   }
 
+  const adGroupKey = normalizeAdGroupNameForMatch_(String(boostRow.boost_ad_group_name || '').trim());
+  const byAdGroup = (mapping.byAdGroup[adGroupKey] || []).filter(isAllowedMappingDestination_);
+  if (byAdGroup.length === 1) {
+    return byAdGroup[0];
+  }
+
   if (byTarget.length > 1) {
     const exactSource = byTarget.filter(function(r) {
       return String(r.source_product_key || '').trim() === String(boostRow.product_key || '').trim() &&
@@ -1403,6 +1431,12 @@ function resolveMappingDestination_(mapping, targetKey, boostRow) {
     });
     if (exactSource.length === 1) {
       return exactSource[0];
+    }
+    const sameAdGroup = byTarget.filter(function(r) {
+      return adGroupNamesRoughlyMatch_(String(r.source_boost_ad_group_name || '').trim(), String(boostRow.boost_ad_group_name || '').trim());
+    });
+    if (sameAdGroup.length === 1) {
+      return sameAdGroup[0];
     }
   }
 
