@@ -160,11 +160,35 @@ function setupSheets() {
     'boost_ad_group_name',
     'target_type',
     'target_text',
+    'clicks',
+    'orders',
+    'roas',
+    'cvr',
+    'cpc',
     'reason',
     'required_action',
+    'selected_candidate',
     'candidate_count',
     'candidate_campaign_names',
-    'candidate_ad_group_names'
+    'candidate_ad_group_names',
+    'candidate_1_label',
+    'candidate_1_campaign_id',
+    'candidate_1_campaign_name',
+    'candidate_1_ad_group_id',
+    'candidate_1_ad_group_name',
+    'candidate_1_default_bid',
+    'candidate_2_label',
+    'candidate_2_campaign_id',
+    'candidate_2_campaign_name',
+    'candidate_2_ad_group_id',
+    'candidate_2_ad_group_name',
+    'candidate_2_default_bid',
+    'candidate_3_label',
+    'candidate_3_campaign_id',
+    'candidate_3_campaign_name',
+    'candidate_3_ad_group_id',
+    'candidate_3_ad_group_name',
+    'candidate_3_default_bid'
   ]);
   ensureSheetWithHeaders_(ss, 'output_summary', ['metric', 'value']);
   ensureSheetWithHeaders_(ss, 'output_bulk_sp', [
@@ -504,11 +528,37 @@ function runBoostStopWorkflow() {
   writeRows_(ss.getSheetByName('output_migrate_exact'), result.migrations);
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
   ensureSheetHasColumns_(ss.getSheetByName('output_blockers'), [
+    'clicks',
+    'orders',
+    'roas',
+    'cvr',
+    'cpc',
+    'selected_candidate',
     'candidate_count',
     'candidate_campaign_names',
-    'candidate_ad_group_names'
+    'candidate_ad_group_names',
+    'candidate_1_label',
+    'candidate_1_campaign_id',
+    'candidate_1_campaign_name',
+    'candidate_1_ad_group_id',
+    'candidate_1_ad_group_name',
+    'candidate_1_default_bid',
+    'candidate_2_label',
+    'candidate_2_campaign_id',
+    'candidate_2_campaign_name',
+    'candidate_2_ad_group_id',
+    'candidate_2_ad_group_name',
+    'candidate_2_default_bid',
+    'candidate_3_label',
+    'candidate_3_campaign_id',
+    'candidate_3_campaign_name',
+    'candidate_3_ad_group_id',
+    'candidate_3_ad_group_name',
+    'candidate_3_default_bid'
   ]);
-  writeRows_(ss.getSheetByName('output_blockers'), result.blockers);
+  const blockerSheet = ss.getSheetByName('output_blockers');
+  writeRows_(blockerSheet, result.blockers);
+  applyBlockerSelectionDropdowns_(blockerSheet);
   writeSummary_(ss.getSheetByName('output_summary'), result.summary);
   writeRows_(ss.getSheetByName('output_bulk_sp'), buildBulkSpRows_(result.migrations, result.pauses, config));
 
@@ -527,8 +577,10 @@ function buildBulkSpSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const config = loadConfig_(ss.getSheetByName('config'));
   const migrations = getRows_(ss.getSheetByName('output_migrate_exact'));
+  const blockers = getRows_(ss.getSheetByName('output_blockers'));
   const pauses = getRows_(ss.getSheetByName('output_pause_boost'));
-  const bulkRows = buildBulkSpRows_(migrations, pauses, config);
+  const selectedBlockerMigrations = buildSelectedBlockerMigrations_(blockers, config);
+  const bulkRows = buildBulkSpRows_(dedupMigrations_(migrations.concat(selectedBlockerMigrations)), pauses, config);
   writeRows_(ss.getSheetByName('output_bulk_sp'), bulkRows);
   SpreadsheetApp.getUi().alert('output_bulk_sp を再生成しました。行数: ' + bulkRows.length);
 }
@@ -663,14 +715,21 @@ function evaluateRows_(boostRows, mapping, config, approvedStopKeys, approvedUni
         boost_ad_group_name: r.boost_ad_group_name,
         target_type: r.target_type,
         target_text: r.target_text,
+        clicks: clicks,
+        orders: orders,
+        roas: round2_(roas),
+        cvr: round2_(cvr),
+        cpc: round2_(cpc),
         reason: '好調キーワードだが移行先が見つからない',
         required_action: candidates.length
           ? '候補Campaign/AdGroupを確認して input_mapping を追加'
           : 'input_mapping を確認（Manualのみ / boost除外 / 同名広告グループ）',
         candidate_count: candidates.length,
         candidate_campaign_names: candidates.map(function(c) { return c.normal_campaign_name; }).join(' | '),
-        candidate_ad_group_names: candidates.map(function(c) { return c.normal_ad_group_name; }).join(' | ')
+        candidate_ad_group_names: candidates.map(function(c) { return c.normal_ad_group_name; }).join(' | '),
+        selected_candidate: ''
       });
+      Object.assign(blockers[blockers.length - 1], buildBlockerCandidateFields_(candidates));
       return;
     }
 
@@ -871,6 +930,131 @@ function buildBulkSpRows_(migrations, pauses, config) {
   });
 
   return rows;
+}
+
+function dedupMigrations_(migrations) {
+  const seen = {};
+  return (migrations || []).filter(function(m) {
+    const key = [
+      m.campaign_id,
+      m.ad_group_id,
+      m.target_type,
+      String(m.target_text || '').toLowerCase(),
+      m.match_type || 'exact'
+    ].join('|');
+    if (seen[key]) {
+      return false;
+    }
+    seen[key] = true;
+    return true;
+  });
+}
+
+function buildSelectedBlockerMigrations_(blockers, config) {
+  return (blockers || []).reduce(function(acc, b) {
+    if (String(b.blocker_type || '') !== 'migration_required_but_mapping_missing') {
+      return acc;
+    }
+    const selected = String(b.selected_candidate || '').trim();
+    if (!selected) {
+      return acc;
+    }
+    const candidate = resolveSelectedBlockerCandidate_(b, selected);
+    if (!candidate) {
+      return acc;
+    }
+    const defaultBid = toNumber_(candidate.default_bid);
+    const cpc = toNumber_(b.cpc);
+    const roas = toNumber_(b.roas);
+    const baseBid = defaultBid > 0 ? defaultBid : (cpc > 0 ? cpc : config.fallback_bid);
+    const bid = calcMigrationBid_(baseBid, roas, config);
+    acc.push({
+      action: 'add_to_normal',
+      entity: String(b.target_type || '') === 'keyword' ? 'Keyword' : 'ProductTargeting',
+      operation: 'create',
+      state: 'enabled',
+      campaign_id: candidate.campaign_id,
+      campaign_name: candidate.campaign_name,
+      ad_group_id: candidate.ad_group_id,
+      ad_group_name: candidate.ad_group_name,
+      target_type: b.target_type,
+      target_text: b.target_text,
+      match_type: 'exact',
+      bid: bid,
+      reason: 'Blocker候補を手動選択して移行',
+      source_boost_campaign_id: b.boost_campaign_id,
+      source_boost_ad_group_id: b.boost_ad_group_id,
+      clicks: toNumber_(b.clicks),
+      orders: toNumber_(b.orders),
+      roas: roas,
+      cvr: toNumber_(b.cvr)
+    });
+    return acc;
+  }, []);
+}
+
+function resolveSelectedBlockerCandidate_(blockerRow, selectedLabel) {
+  for (let i = 1; i <= 3; i += 1) {
+    const label = String(blockerRow['candidate_' + i + '_label'] || '').trim();
+    if (label && label === selectedLabel) {
+      return {
+        campaign_id: String(blockerRow['candidate_' + i + '_campaign_id'] || '').trim(),
+        campaign_name: String(blockerRow['candidate_' + i + '_campaign_name'] || '').trim(),
+        ad_group_id: String(blockerRow['candidate_' + i + '_ad_group_id'] || '').trim(),
+        ad_group_name: String(blockerRow['candidate_' + i + '_ad_group_name'] || '').trim(),
+        default_bid: blockerRow['candidate_' + i + '_default_bid']
+      };
+    }
+  }
+  return null;
+}
+
+function buildBlockerCandidateFields_(candidates) {
+  const fields = {};
+  for (let i = 0; i < 3; i += 1) {
+    const c = candidates[i];
+    const n = i + 1;
+    fields['candidate_' + n + '_label'] = c ? buildCandidateLabel_(c) : '';
+    fields['candidate_' + n + '_campaign_id'] = c ? c.normal_campaign_id : '';
+    fields['candidate_' + n + '_campaign_name'] = c ? c.normal_campaign_name : '';
+    fields['candidate_' + n + '_ad_group_id'] = c ? c.normal_ad_group_id : '';
+    fields['candidate_' + n + '_ad_group_name'] = c ? c.normal_ad_group_name : '';
+    fields['candidate_' + n + '_default_bid'] = c ? c.default_bid : '';
+  }
+  return fields;
+}
+
+function buildCandidateLabel_(candidate) {
+  return [candidate.normal_campaign_name, candidate.normal_ad_group_name].join(' > ');
+}
+
+function applyBlockerSelectionDropdowns_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) {
+    return;
+  }
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const selectedCol = headers.indexOf('selected_candidate') + 1;
+  if (!selectedCol) {
+    return;
+  }
+  const candidateCols = [1, 2, 3].map(function(i) {
+    return headers.indexOf('candidate_' + i + '_label') + 1;
+  });
+  for (let row = 2; row <= sheet.getLastRow(); row += 1) {
+    const options = candidateCols.map(function(col) {
+      return col ? String(sheet.getRange(row, col).getValue() || '').trim() : '';
+    }).filter(function(v) { return v !== ''; });
+    const cell = sheet.getRange(row, selectedCol);
+    cell.clearDataValidations();
+    if (!options.length) {
+      continue;
+    }
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(options, true)
+      .setAllowInvalid(false)
+      .build();
+    cell.setDataValidation(rule);
+  }
 }
 
 function blankSpBulkRow_() {

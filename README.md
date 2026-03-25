@@ -269,6 +269,7 @@ Windows環境などで必要な場合のみ利用する。
 - 停止対象ASINのBoostと同じ広告グループ名のみ採用（末尾英字ゆらぎは近似一致）
 - 好調キーワードで移行先不明の場合は `output_blockers` に `migration_required_but_mapping_missing` を出力
 - このとき `candidate_campaign_names` / `candidate_ad_group_names` に候補のManual移行先を最大3件まで表示
+- `selected_candidate` のプルダウンから候補を選ぶと、`1.5) Amazon SP一括行を再生成` 実行時にその選択分も `output_bulk_sp` に追加
 
 ## 運用上の注意
 - 新規SKUが多い週は、`input_stop_products` の承認漏れがないかを優先確認
