@@ -4,6 +4,7 @@ function onOpen() {
     .addItem('0) シート初期化', 'setupSheets')
     .addItem('0.1) config推奨値を再作成', 'setupConfigPresetsOnly')
     .addItem('0.2) configをROAS項目へ変換', 'migrateConfigAcosToRoas')
+    .addItem('0.3) ROAS20入札係数をconfigへ適用', 'applyRoas20BidConfig')
     .addItem('0.4) RAWから必須inputを自動作成', 'autoBuildInputsFromRaw')
     .addItem('0.5) SP生データをinput_boostへ変換', 'convertRawSpBulkToInputBoost')
     .addItem('0.6) 外部シートのSPデータを変換', 'convertExternalSpBulkToInputBoost')
@@ -289,6 +290,39 @@ function migrateConfigAcosToRoas() {
   sheet.getRange(2, 1, output.length, 3).setValues(output);
 
   SpreadsheetApp.getUi().alert('config を ROAS 項目へ変換しました。min_roas_to_migrate を確認してください。');
+}
+
+function applyRoas20BidConfig() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('config');
+  if (!sheet) {
+    throw new Error('config シートがありません。先に「0) シート初期化」を実行してください。');
+  }
+
+  const values = {
+    use_roas_bid_multiplier: true,
+    roas_bid_multiplier_ge_35: 0.85,
+    roas_bid_multiplier_ge_25: 0.75,
+    roas_bid_multiplier_ge_20: 0.65,
+    roas_bid_multiplier_ge_15: 0.55,
+    roas_bid_multiplier_lt_15: 0.45,
+    min_bid: 20,
+    max_bid: 120
+  };
+
+  const notes = {
+    use_roas_bid_multiplier: 'true なら ROAS帯に応じて入札係数を適用',
+    roas_bid_multiplier_ge_35: 'ROAS>=35 の入札係数',
+    roas_bid_multiplier_ge_25: '25<=ROAS<35 の入札係数',
+    roas_bid_multiplier_ge_20: '20<=ROAS<25 の入札係数',
+    roas_bid_multiplier_ge_15: '15<=ROAS<20 の入札係数',
+    roas_bid_multiplier_lt_15: 'ROAS<15 の入札係数',
+    min_bid: '移行入札の下限',
+    max_bid: '移行入札の上限'
+  };
+
+  upsertConfigRows_(sheet, values, notes);
+  SpreadsheetApp.getUi().alert('ROAS20向け入札係数を config に適用しました。');
 }
 
 function convertRawSpBulkToInputBoost() {
@@ -1484,6 +1518,41 @@ function ensureSheetWithHeaders_(ss, name, headers) {
     sheet.clearContents();
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
+}
+
+function upsertConfigRows_(sheet, valuesObj, notesObj) {
+  const defaults = defaultConfig_();
+  const noteMap = notesObj || {};
+  const rows = getRows_(sheet);
+  const indexByKey = {};
+  rows.forEach(function(r, i) {
+    const key = String(r.key || '').trim();
+    if (key) {
+      indexByKey[key] = i;
+    }
+  });
+
+  const headers = ['key', 'value', 'note'];
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, 3).setValues([headers]);
+  }
+
+  Object.keys(valuesObj).forEach(function(key) {
+    const value = valuesObj[key];
+    const note = noteMap[key] || '';
+    if (indexByKey[key] != null) {
+      const rowNum = indexByKey[key] + 2;
+      sheet.getRange(rowNum, 2).setValue(value);
+      if (note) {
+        sheet.getRange(rowNum, 3).setValue(note);
+      }
+    } else {
+      const rowNum = Math.max(2, sheet.getLastRow() + 1);
+      const defaultNote = note || '';
+      const fallback = defaults[key];
+      sheet.getRange(rowNum, 1, 1, 3).setValues([[key, value != null ? value : fallback, defaultNote]]);
+    }
+  });
 }
 
 function getRows_(sheet) {
