@@ -982,7 +982,12 @@ function applyBlockerSelectionDropdowns_(sheet) {
     const cell = sheet.getRange(row, selectedCol);
     cell.clearDataValidations();
     if (!options.length) {
+      cell.clearContent();
       continue;
+    }
+    const currentValue = String(cell.getValue() || '').trim();
+    if (currentValue && options.indexOf(currentValue) === -1) {
+      cell.clearContent();
     }
     const rule = SpreadsheetApp.newDataValidation()
       .requireValueInList(options, true)
