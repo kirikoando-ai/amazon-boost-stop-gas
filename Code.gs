@@ -910,6 +910,9 @@ function buildMapping_(rows) {
   const byTarget = {};
   const byGroupProduct = {};
   rows.forEach(function(r) {
+    if (!isAllowedMappingDestination_(r)) {
+      return;
+    }
     const key = getTargetKey_(r);
     if (key) {
       if (!byTarget[key]) {
@@ -1096,6 +1099,15 @@ function isManualCampaignRow_(r) {
   return t.indexOf('manual') !== -1 || t.indexOf('マニュアル') !== -1;
 }
 
+function isAutoCampaignName_(campaignName) {
+  const name = String(campaignName || '').toLowerCase();
+  return name.indexOf('auto') !== -1 || name.indexOf('オート') !== -1;
+}
+
+function isAllowedMappingDestination_(row) {
+  return !isAutoCampaignName_(row.normal_campaign_name);
+}
+
 function normalizeAdGroupNameForMatch_(name) {
   let s = String(name || '').trim().toUpperCase();
   s = s.replace(/\s+/g, '').replace(/[-_]/g, '');
@@ -1118,13 +1130,13 @@ function adGroupSetHasMatch_(adGroupNames, targetName) {
 }
 
 function resolveMappingDestination_(mapping, targetKey, boostRow) {
-  const byTarget = mapping.byTarget[targetKey] || [];
+  const byTarget = (mapping.byTarget[targetKey] || []).filter(isAllowedMappingDestination_);
   if (byTarget.length === 1) {
     return byTarget[0];
   }
 
   const groupKey = String(boostRow.product_key || '').trim() + '|' + normalizeAdGroupNameForMatch_(String(boostRow.boost_ad_group_name || '').trim());
-  const byGroup = mapping.byGroupProduct[groupKey] || [];
+  const byGroup = (mapping.byGroupProduct[groupKey] || []).filter(isAllowedMappingDestination_);
   if (byGroup.length === 1) {
     return byGroup[0];
   }
