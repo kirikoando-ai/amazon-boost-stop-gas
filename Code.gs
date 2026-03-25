@@ -492,6 +492,8 @@ function runBoostStopWorkflow() {
   writeRows_(ss.getSheetByName('output_pause_boost'), result.pauses);
   ensureSheetWithHeaders_(ss, 'output_blockers', outputBlockerHeaders_());
   const blockerSheet = ss.getSheetByName('output_blockers');
+  blockerSheet.clearDataValidations();
+  blockerSheet.clearNote();
   writeRows_(blockerSheet, result.blockers);
   applyBlockerSelectionDropdowns_(blockerSheet);
   writeSummary_(ss.getSheetByName('output_summary'), result.summary);
@@ -1783,7 +1785,7 @@ function ensureSheetWithHeaders_(ss, name, headers) {
     return current[i] === h;
   });
   if (!same) {
-    sheet.clearContents();
+    sheet.clear();
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   }
 }
