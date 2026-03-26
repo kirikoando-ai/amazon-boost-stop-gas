@@ -25,14 +25,17 @@
 `商品広告` 行はASIN補完のためにあると安全です。
 
 4. GASスプレッドシートの `input_bulk_sp_raw` にインポートする
-5. `Boost Ops` → `0.4) RAWから必須inputを自動作成`
-6. `input_stop_products` に停止するASINを入れ、`approved_to_stop=true`
-7. `Boost Ops` → `1) 判定＆出力作成`
-8. 必要なら `output_blockers` の `selected_candidate` で移行先候補を選ぶ
-9. 候補を選んだ場合は `Boost Ops` → `1.5) Amazon SP一括行を再生成`
-10. `output_bulk_sp` を確認する
-11. `Boost Ops` → `1.6) アップロード用Excelを作成（output_bulk_spのみ）`
-12. 作成された `xlsx` をAmazonへアップロードする
+5. `input_stop_products` に停止するASINを入れ、`approved_to_stop=true`
+6. `Boost Ops` → `1) 標準実行（RAW取込後）`
+7. 必要なら `output_blockers` の `selected_candidate` で移行先候補を選ぶ
+8. 候補を選んだ場合は `Boost Ops` → `2) blocker反映して一括行を再生成`
+9. `output_bulk_sp` を確認する
+10. `Boost Ops` → `3) アップロード用Excelを作成`
+11. 作成された `xlsx` をAmazonへアップロードする
+
+## 最初に1回だけやること
+1. `Boost Ops` → `0) 初期セットアップ`
+2. 必要に応じて `config` を調整する
 
 ## Amazonバルクの取得条件
 - 期間: `60日`
@@ -68,7 +71,7 @@
 ### blocker対応
 - `output_blockers` に候補が出る場合がある
 - `selected_candidate` のプルダウンで候補を選べる
-- 選択後に `1.5) Amazon SP一括行を再生成` を実行すると、その選択分も `output_bulk_sp` に入る
+- 選択後に `2) blocker反映して一括行を再生成` を実行すると、その選択分も `output_bulk_sp` に入る
 
 ## configでよく使う項目
 - `min_clicks_to_migrate`
@@ -95,8 +98,6 @@ ROAS目標20の標準値:
 - `min_bid = 20`
 - `max_bid = 120`
 
-必要なら `Boost Ops` → `0.3) ROAS20入札係数をconfigへ適用` を使う
-
 ## 出力前の最終確認
 - `output_bulk_sp` にキーワード移行先として `Auto` が入っていない
 - 移行行が `Keyword / Create / exact`
@@ -105,20 +106,13 @@ ROAS目標20の標準値:
 - `output_blockers` が空、または内容を確認済み
 
 ## メニュー一覧
-- `0) シート初期化`
-- `0.1) config推奨値を再作成`
-- `0.2) configをROAS項目へ変換`
-- `0.3) ROAS20入札係数をconfigへ適用`
-- `0.4) RAWから必須inputを自動作成`
-- `0.5) SP生データをinput_boostへ変換`
-- `0.6) 外部シートのSPデータを変換`
-- `1) 判定＆出力作成`
-- `1.5) Amazon SP一括行を再生成`
-- `1.6) アップロード用Excelを作成（output_bulk_spのみ）`
-- `2) 出力シートをCSV化（Drive保存）`
+- `0) 初期セットアップ`
+- `1) 標準実行（RAW取込後）`
+- `2) blocker反映して一括行を再生成`
+- `3) アップロード用Excelを作成`
 
 ## 補足
-- `1.6)` はAmazonアップロード用に `output_bulk_sp` だけを `xlsx` 出力する
-- `2)` は確認用に複数シートをCSVで保存する
+- `1)` は `RAWから必要データ作成` と `判定＆出力作成` を続けて実行する
+- `3)` はAmazonアップロード用に `output_bulk_sp` だけを `xlsx` 出力する
 - `input_stop_products` は自動更新しない。停止するASINは毎回手入力で管理する
-- `input_mapping` は `0.4)` で自動作成されるが、必要に応じて担当者が微修正してよい
+- `input_mapping` は `1)` の中でRAWから自動更新されるが、必要に応じて担当者が微修正してよい

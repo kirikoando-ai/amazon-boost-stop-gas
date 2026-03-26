@@ -1,19 +1,30 @@
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Boost Ops')
-    .addItem('0) シート初期化', 'setupSheets')
-    .addItem('0.1) config推奨値を再作成', 'setupConfigPresetsOnly')
-    .addItem('0.2) configをROAS項目へ変換', 'migrateConfigAcosToRoas')
-    .addItem('0.3) ROAS20入札係数をconfigへ適用', 'applyRoas20BidConfig')
-    .addItem('0.4) RAWから必須inputを自動作成', 'autoBuildInputsFromRaw')
-    .addItem('0.5) SP生データをinput_boostへ変換', 'convertRawSpBulkToInputBoost')
-    .addItem('0.6) 外部シートのSPデータを変換', 'convertExternalSpBulkToInputBoost')
+    .addItem('0) 初期セットアップ', 'runInitialSetup')
     .addSeparator()
-    .addItem('1) 判定＆出力作成', 'runBoostStopWorkflow')
-    .addItem('1.5) Amazon SP一括行を再生成', 'buildBulkSpSheet')
-    .addItem('1.6) アップロード用Excelを作成（output_bulk_spのみ）', 'exportBulkSpOnlyAsExcel')
-    .addItem('2) 出力シートをCSV化（Drive保存）', 'exportOutputSheetsAsCsv')
+    .addItem('1) 標準実行（RAW取込後）', 'runStandardWorkflow')
+    .addItem('2) blocker反映して一括行を再生成', 'buildBulkSpSheet')
+    .addItem('3) アップロード用Excelを作成', 'exportBulkSpOnlyAsExcel')
     .addToUi();
+}
+
+function runInitialSetup() {
+  setupSheets();
+  applyRoas20BidConfig();
+  SpreadsheetApp.getUi().alert(
+    [
+      '初期セットアップが完了しました。',
+      '次は input_bulk_sp_raw にAmazonバルクを入れて、',
+      'input_stop_products を確認した上で、',
+      'Boost Ops -> 1) 標準実行（RAW取込後） を実行してください。'
+    ].join('\n')
+  );
+}
+
+function runStandardWorkflow() {
+  autoBuildInputsFromRaw();
+  runBoostStopWorkflow();
 }
 
 function setupSheets() {
@@ -190,7 +201,7 @@ function setupSheets() {
 
   writeDefaultConfig_(ss.getSheetByName('config'));
   writeConfigPresets_(ss.getSheetByName('config_presets'));
-  SpreadsheetApp.getUi().alert('シート初期化が完了しました。config_presets で保守/標準/攻めを確認し、config に採用値を入力してから「判定＆出力作成」を実行してください。');
+  SpreadsheetApp.getUi().alert('シート初期化が完了しました。必要に応じて config を調整し、その後は「1) 標準実行（RAW取込後）」を使ってください。');
 }
 
 function setupConfigPresetsOnly() {
@@ -204,7 +215,7 @@ function migrateConfigAcosToRoas() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('config');
   if (!sheet) {
-    throw new Error('config シートがありません。先に「0) シート初期化」を実行してください。');
+    throw new Error('config シートがありません。先に「0) 初期セットアップ」を実行してください。');
   }
 
   const rows = getRows_(sheet);
@@ -287,7 +298,7 @@ function applyRoas20BidConfig() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('config');
   if (!sheet) {
-    throw new Error('config シートがありません。先に「0) シート初期化」を実行してください。');
+    throw new Error('config シートがありません。先に「0) 初期セットアップ」を実行してください。');
   }
 
   const values = {
@@ -371,7 +382,7 @@ function autoBuildInputsFromRaw() {
       'input_mapping: ' + autoMappingRows.length + ' 行',
       'input_boost: ' + convertedBoost.length + ' 行',
       '注意: input_stop_products は自動更新していません（停止ASINは手入力）。',
-      '次: input_stop_products に停止ASINを入力して approved_to_stop=true を付け、1) 判定＆出力作成'
+      '次: input_stop_products を確認し、1) 標準実行（RAW取込後）'
     ].join('\n')
   );
 }
@@ -557,7 +568,7 @@ function exportBulkSpOnlyAsExcel() {
 
   const values = sheet.getDataRange().getValues();
   if (!values.length) {
-    throw new Error('output_bulk_sp にデータがありません。先に 1) 判定＆出力作成 または 1.5) Amazon SP一括行を再生成 を実行してください。');
+    throw new Error('output_bulk_sp にデータがありません。先に 1) 標準実行（RAW取込後） または 2) blocker反映して一括行を再生成 を実行してください。');
   }
 
   const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss');
@@ -1002,7 +1013,7 @@ function applyBlockerSelectionDropdowns_(sheet) {
       .build();
     cell.setDataValidation(rule);
     cell.setBackground('#fff2cc');
-    cell.setNote('候補を選ぶと、1.5) Amazon SP一括行を再生成 で output_bulk_sp に追加されます。');
+    cell.setNote('候補を選ぶと、2) blocker反映して一括行を再生成 で output_bulk_sp に追加されます。');
   }
 }
 
