@@ -10,9 +10,27 @@ function onOpen() {
 }
 
 function runInitialSetup() {
+  const ui = SpreadsheetApp.getUi();
+  const nonEmptySheets = getNonEmptySetupRiskSheets_();
+  if (nonEmptySheets.length) {
+    const response = ui.alert(
+      '初期セットアップの確認',
+      [
+        'この操作では初期シートを作り直すため、既存データが上書きされる可能性があります。',
+        'データが入っているシート: ' + nonEmptySheets.join(', '),
+        '新しいコピー直後だけに使う想定です。続行しますか？'
+      ].join('\n'),
+      ui.ButtonSet.OK_CANCEL
+    );
+    if (response !== ui.Button.OK) {
+      ui.alert('初期セットアップをキャンセルしました。');
+      return;
+    }
+  }
+
   setupSheets();
   applyRoas20BidConfig();
-  SpreadsheetApp.getUi().alert(
+  ui.alert(
     [
       '初期セットアップが完了しました。',
       '次は input_bulk_sp_raw にAmazonバルクを入れて、',
@@ -25,6 +43,46 @@ function runInitialSetup() {
 function runStandardWorkflow() {
   autoBuildInputsFromRaw();
   runBoostStopWorkflow();
+}
+
+function getNonEmptySetupRiskSheets_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const targetNames = [
+    'config',
+    'input_boost',
+    'input_mapping',
+    'input_bulk_sp_raw',
+    'input_boost_campaigns',
+    'input_stop_products',
+    'output_migrate_exact',
+    'output_pause_boost',
+    'output_blockers',
+    'output_summary',
+    'output_bulk_sp'
+  ];
+
+  return targetNames.filter(function(name) {
+    const sheet = ss.getSheetByName(name);
+    return sheet && sheetHasDataBeyondHeader_(sheet);
+  });
+}
+
+function sheetHasDataBeyondHeader_(sheet) {
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow <= 1 || lastCol <= 0) {
+    return false;
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
+  for (let r = 0; r < values.length; r += 1) {
+    for (let c = 0; c < values[r].length; c += 1) {
+      if (String(values[r][c] || '').trim() !== '') {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function setupSheets() {
