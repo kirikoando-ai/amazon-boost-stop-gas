@@ -484,7 +484,7 @@ function convertSpRowsToInputBoost_(rawRows, boostCampaignMap, config, asinIndex
   const converted = [];
 
   rawRows.forEach(function(r) {
-    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') {
+    if (!isSponsoredProductsRow_(r)) {
       return;
     }
 
@@ -876,7 +876,7 @@ function buildApprovedUnitsFromRaw_(rawRows, approvedStopKeys, pauseLevel) {
     return units;
   }
   rawRows.forEach(function(r) {
-    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') {
+    if (!isSponsoredProductsRow_(r)) {
       return;
     }
     const asin = normalizeProductKey_(r['ASIN（情報提供のみ）']);
@@ -1270,7 +1270,7 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
 
   // 1) 通常側の移行先候補を構築（Manualのみ / boost・全商品・B2B除外）
   rawRows.forEach(function(r) {
-    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
+    if (!isSponsoredProductsRow_(r)) return;
     const campaignId = String(r['キャンペーンID'] || '').trim();
     const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
     const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
@@ -1308,7 +1308,7 @@ function buildMappingRowsFromRaw_(rawRows, config, boostCampaignRows) {
 
   // 2) Boost側キーワードを起点にマッピングを作成（同一ASIN×同名広告グループ）
   rawRows.forEach(function(r) {
-    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
+    if (!isSponsoredProductsRow_(r)) return;
 
     const entity = String(r['エンティティ'] || '').trim();
     const targetType = normalizeTargetTypeFromEntity_(entity);
@@ -1361,7 +1361,7 @@ function buildManualDestinationCandidateIndex_(rawRows, config, boostCampaignRow
   const byAdGroup = {};
 
   rawRows.forEach(function(r) {
-    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') return;
+    if (!isSponsoredProductsRow_(r)) return;
     const campaignId = String(r['キャンペーンID'] || '').trim();
     const campaignName = String(r['キャンペーン名'] || r['キャンペーン名（情報提供のみ）'] || '').trim();
     const boostInfo = resolveBoostCampaign_(campaignId, campaignName, boostMap, config);
@@ -1536,7 +1536,7 @@ function buildAsinIndexFromRaw_(rawRows) {
   const byAdGroup = {};
 
   rawRows.forEach(function(r) {
-    if (String(r['プロダクト'] || '').trim() !== 'スポンサープロダクト広告') {
+    if (!isSponsoredProductsRow_(r)) {
       return;
     }
     const asin = String(r['ASIN（情報提供のみ）'] || '').trim();
@@ -1629,13 +1629,19 @@ function resolveBoostCampaign_(campaignId, campaignName, boostCampaignMap, confi
 }
 
 function normalizeTargetTypeFromEntity_(entity) {
-  if (entity === 'キーワード') {
+  const normalized = String(entity || '').trim().toLowerCase();
+  if (normalized === 'キーワード' || normalized === 'keyword') {
     return 'keyword';
   }
-  if (entity === '商品ターゲティング') {
+  if (normalized === '商品ターゲティング' || normalized === 'product targeting' || normalized === 'producttargeting') {
     return 'product_targeting';
   }
   return '';
+}
+
+function isSponsoredProductsRow_(row) {
+  const product = String(row['プロダクト'] || row['Product'] || '').trim().toLowerCase();
+  return product === 'スポンサープロダクト広告' || product === 'sponsored products';
 }
 
 function normalizeMatchType_(value) {
@@ -2022,10 +2028,67 @@ function getRows_(sheet) {
     const obj = {};
     headers.forEach(function(h, i) {
       obj[h] = row[i];
+      const aliases = HEADER_ALIASES_[h] || [];
+      aliases.forEach(function(alias) {
+        if (obj[alias] == null || obj[alias] === '') {
+          obj[alias] = row[i];
+        }
+      });
     });
     return obj;
   });
 }
+
+const HEADER_ALIASES_ = {
+  'Product': ['プロダクト'],
+  'Entity': ['エンティティ'],
+  'Operation': ['操作'],
+  'Campaign ID': ['キャンペーンID'],
+  'Ad Group ID': ['広告グループID'],
+  'Portfolio ID': ['ポートフォリオID'],
+  'Ad ID': ['広告ID'],
+  'Keyword ID': ['キーワードID'],
+  'Product Targeting ID': ['商品ターゲティングID'],
+  'Campaign Name': ['キャンペーン名'],
+  'Ad Group Name': ['広告グループ名'],
+  'Campaign Name (Informational only)': ['キャンペーン名（情報提供のみ）'],
+  'Ad Group Name (Informational only)': ['広告グループ名（情報提供のみ）'],
+  'Portfolio Name (Informational only)': ['ポートフォリオ名（情報提供のみ）'],
+  'Start Date': ['開始日'],
+  'End Date': ['終了日'],
+  'Targeting Type': ['ターゲティングの種類'],
+  'State': ['ステータス'],
+  'Campaign State (Informational only)': ['キャンペーンの状態（情報提供のみ）'],
+  'Ad Group State (Informational only)': ['広告グループの状態（情報提供のみ）'],
+  'Daily Budget': ['1日の予算'],
+  'ASIN (Informational only)': ['ASIN（情報提供のみ）'],
+  'Eligibility Status (Informational only)': ['利用資格のステータス（情報提供のみ）'],
+  'Reason for Ineligibility (Informational only)': ['対象外の理由（情報提供のみ）'],
+  'Ad Group Default Bid': ['広告グループの入札額の初期値'],
+  'Ad Group Default Bid (Informational only)': ['広告グループの入札額の初期値（情報提供のみ）'],
+  'Bid': ['入札額'],
+  'Keyword Text': ['キーワードテキスト'],
+  'Native Language Keyword': ['ネイティブ言語のキーワード'],
+  'Native Language Locale': ['ネイティブ言語の地域'],
+  'Match Type': ['マッチタイプ'],
+  'Bidding Strategy': ['入札戦略'],
+  'Placement': ['掲載枠'],
+  'Percentage': ['割合'],
+  'Product Targeting Expression': ['商品ターゲティング式'],
+  'Resolved Product Targeting Expression (Informational only)': ['解決済みの商品ターゲティング式（情報提供のみ）'],
+  'Audience ID': ['オーディエンスID'],
+  'Shopper Cohort Percentage': ['購入者のコホート割合'],
+  'Shopper Cohort Type': ['お客様コホートタイプ'],
+  'Segment Name (Informational only)': ['セグメント名（情報提供のみ）'],
+  'Impressions': ['インプレッション数'],
+  'Clicks': ['クリック数'],
+  'Click-through Rate': ['クリックスルー率'],
+  'Spend': ['支出'],
+  'Sales': ['売上'],
+  'Orders': ['注文'],
+  'Units': ['商品点数'],
+  'Conversion Rate': ['コンバージョン率']
+};
 
 function writeRows_(sheet, rows) {
   if (!sheet) {
